@@ -166,3 +166,59 @@ subsystem list); deposition-specific entries proposed and confirmed.
 
 **Definition of done:** `uv run python scripts/taxonomy.py` also prints all subsystems
 with scope and `20 subsystems total`. ✓
+
+---
+
+## Step 4 — Taxonomy: alarm/fault code catalog (`scripts/taxonomy.py`)
+
+Third task of Milestone 1. The user supplied a per-subsystem alarm skeleton and asked
+to flesh it out to ~60 (the deposition alarms were proposed and confirmed).
+
+**What we built**
+- A frozen `AlarmCode` dataclass (`code`, `text`, `subsystem`, `typical_causes`) and an
+  `ALARMS` registry of **60 codes** keyed by code.
+- Extended the `__main__` dump to list alarms and run a light reference check that
+  every alarm's `subsystem` exists in `SUBSYSTEMS`.
+
+**Key things to understand**
+- **Codes are flat (`ALM-001`…`ALM-060`); the owning subsystem is a *field*, not part
+  of the id.** This was a deliberate user call ("no subsystem-specific codes"), so the
+  mnemonic-prefix scheme (`RF-2xx`, `VAC-1xx`) from the original plan was dropped.
+- **Not every subsystem raises alarms.** Hardware-only subsystems — `rf_cabling`,
+  `gas_injector`, `edge_ring`, `foreline` — have *zero* codes. They cause problems but
+  don't self-report, so they'll appear as *root causes* in the failure signatures
+  (Task 4), not as alarms. This asymmetry is real fab behavior and worth internalizing.
+- **`typical_causes` deliberately points across subsystems** (e.g. "high reflected
+  power" lists *degraded RF cabling*). That cross-linking is what makes multi-document
+  diagnosis possible later — the alarm is on one subsystem, the cause on another.
+- **No `severity` field (dropped on review).** Every alarm here is effectively
+  critical, so a `severity` column would be a constant — the same value 60 times. A
+  field that never varies carries no information, *implies* a distinction that doesn't
+  exist (inviting code to branch on it), and is just noise. YAGNI: model the dimension
+  only if/when it actually varies; re-adding is trivial since this is a seed file.
+
+**Decision & why (rejected alternative)**
+- **Flat codes + subsystem field** over **mnemonic prefixes** — honors the user's
+  preference and keeps the subsystem mapping in one place (the field) rather than
+  duplicated in the id string, where it could drift.
+- **Dropped `severity`** over keeping a uniformly-`critical` field — a constant column
+  isn't data. Rejected "keep it for future-proofing": re-adding a field to a seed file
+  we own is cheap, and a misleading dead field today is a real cost.
+- **60 codes weighted toward alarm-prone subsystems** (RF, vacuum, gas, thermal,
+  wafer-handling) rather than one-per-subsystem — rejected even spreading because it
+  would misrepresent which subsystems actually throw alarms.
+
+**What could break**
+- Reference integrity (alarm→subsystem) is only checked in `__main__`, not enforced at
+  import; a bad ref in code wouldn't fail a plain `import`. The dedicated self-check
+  task (Task 5) will harden this. (Currently all 60 refs validate.)
+- `typical_causes` are first-pass domain judgments — easy to redline later without
+  structural change.
+
+**Next logical improvement**
+- Task 4: recurring **failure signatures** (symptom → subsystem → root cause, optional
+  preceding alarm), referencing real `TOOLS` / `SUBSYSTEMS` / `ALARMS` ids — including
+  the hardware-only root causes (particles from edge ring / gas injector, RF cabling).
+
+**Definition of done:** `uv run python scripts/taxonomy.py` prints `60 alarms total`
+and `alarm -> subsystem refs valid: True`. ✓
