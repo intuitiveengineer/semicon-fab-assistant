@@ -66,3 +66,57 @@ alternative) · what could break.**
 
 **Definition of done:** `uv run python smoke_test.py` prints a reply beginning
 with "Connection OK".
+
+---
+
+## Step 2 — Taxonomy seed: representation + tools & chambers (`scripts/taxonomy.py`)
+
+First task of Milestone 1 (Data). The taxonomy is built incrementally; this step
+sets the data representation and seeds the equipment roster.
+
+**What we built**
+- `scripts/taxonomy.py` with:
+  - `MODULE_TYPES` / `PROCESS_TYPES` — the allowed vocabulary (etch + deposition only).
+  - A frozen `Tool` dataclass (`tool_id`, `module_type`, `process_type`, `chambers`)
+    with a `chamber_ids()` helper deriving fully-qualified ids like `ETCH02_PM3`.
+  - `TOOLS` — the fab roster (3 etch + 4 deposition tools) keyed by `tool_id`.
+  - A `__main__` dump so `uv run python scripts/taxonomy.py` prints the seed.
+
+**Key things to understand**
+- This file is the project's **single source of truth**: the data generator samples
+  from it (consistency), the benchmark grades against it (ground truth), and a later
+  validation gate rejects docs referencing anything not defined here (the allow-list).
+  Small file, very high leverage — a bug here propagates everywhere.
+- **Why `@dataclass`:** named, typed fields force every record to be complete, so a
+  typo (`subsytem`, a missing field) fails *at construction*, not silently three
+  modules downstream. Plus autocomplete and self-documentation, with zero deps.
+- **Why `frozen=True`:** seed data must never be mutated at runtime; freezing turns an
+  accidental reassignment into an error, enforcing the "source of truth" contract.
+- **Derive, don't hand-type:** `chamber_ids()` builds `TOOL/CHAMBER` from structure,
+  so the citation/metadata form can never drift from the roster.
+
+**Decision & why (rejected alternatives)**
+- **Frozen dataclasses + dict registries** over **Pydantic** — Pydantic's value is
+  validating *untrusted, dynamic* input (LLM output → `agent/schemas.py` later). This
+  taxonomy is static, hand-authored data read at import; Pydantic would add a
+  dependency and parsing cost for validation we don't need, and blur the teaching line
+  of introducing it later for the job it's actually good at.
+- ...also over **plain dicts/constants** (what `plan.md` literally says): a deliberate
+  one-notch upgrade. Same idea (constants in a Python file) but with typo-safety, which
+  matters most for a high-leverage seed. We added a safety net, not complexity.
+- Naming: chambers vary by tool (`PM#` for etch/most, `Stn#` for the PECVD cluster) on
+  purpose, so the generated corpus doesn't look templated.
+
+**What could break**
+- Nothing is *enforced* yet — a Tool could declare a `process_type` outside
+  `PROCESS_TYPES` and nothing complains. That cross-check is a planned later task
+  (the self-check / validation step), not an oversight.
+- Later modules importing this will need `scripts/` to be importable (e.g. an
+  `__init__.py` or path handling); fine for now since we run it directly.
+
+**Next logical improvement**
+- Task 2: add the shared **subsystems** vocabulary, then the alarm-code catalog
+  (Task 3) and failure signatures (Task 4), then a self-check tying them together.
+
+**Definition of done:** `uv run python scripts/taxonomy.py` prints all 7 tools with
+their fully-qualified chamber ids and `7 tools total`. ✓
