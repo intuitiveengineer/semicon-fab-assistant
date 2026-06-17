@@ -120,3 +120,49 @@ sets the data representation and seeds the equipment roster.
 
 **Definition of done:** `uv run python scripts/taxonomy.py` prints all 7 tools with
 their fully-qualified chamber ids and `7 tools total`. ✓
+
+---
+
+## Step 3 — Taxonomy: subsystems vocabulary (`scripts/taxonomy.py`)
+
+Second task of Milestone 1. Domain content supplied by the user (real-flavored
+subsystem list); deposition-specific entries proposed and confirmed.
+
+**What we built**
+- A frozen `Subsystem` dataclass (`subsystem_id`, `name`, `applies_to`) and a
+  `SUBSYSTEMS` registry keyed by id — 20 entries: 12 common, 5 etch-only, 3 dep-only.
+- `applies_to` defaults to both module families; etch-only / dep-only entries pass
+  `ETCH_ONLY` / `DEP_ONLY` shorthands.
+- Extended the `__main__` dump to print subsystems with their scope.
+
+**Key things to understand**
+- Subsystems are the **connective tissue**: the alarm catalog (Task 3) and failure
+  signatures (Task 4) both reference these `subsystem_id`s, so they're defined first.
+- **Scope modeling (`applies_to`):** etch and deposition don't share every subsystem.
+  Etch *cools* the wafer (ESC + chiller) and adds a bias RF generator/matcher + optical
+  endpoint; deposition *heats* it (heated pedestal) and adds precursor delivery +
+  remote-plasma clean. Encoding scope here stops a later signature from attributing an
+  etch-only subsystem to a deposition tool.
+- **Dataclass default field:** `applies_to: tuple[...] = MODULE_TYPES` lets the many
+  shared subsystems omit the argument — first use of a defaulted dataclass field here.
+
+**Decision & why (rejected alternative)**
+- **No subsystem-specific alarm-code prefixes** (user call): a subsystem is just id +
+  name + scope. Rejected baking `RF`/`VAC`-style prefixes into subsystems — keeps the
+  alarm-code naming scheme a separate concern we design in Task 3.
+- **PVD kept minimal:** `applies_to` is coarse (module-type level), so dep-only
+  subsystems formally attach to PVD too, though PVD uses none of them. Rejected adding
+  PVD-specific subsystems (target/magnetron/DC supply) — it's a single tool and not
+  worth the modeling cost for v1.
+
+**What could break**
+- The PVD over-inclusion above is a known simplification; hand-authored signatures
+  (Task 4) keep per-tool accuracy, so it shouldn't surface in the corpus.
+- Still no enforcement that `applies_to` values are valid `MODULE_TYPES` — folds into
+  the planned self-check task.
+
+**Next logical improvement**
+- Task 3: the alarm/fault code catalog (~30 codes), each referencing a `subsystem_id`.
+
+**Definition of done:** `uv run python scripts/taxonomy.py` also prints all subsystems
+with scope and `20 subsystems total`. ✓

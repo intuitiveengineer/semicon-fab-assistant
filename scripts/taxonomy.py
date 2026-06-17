@@ -13,8 +13,9 @@ Why it lives in one file:
   rejected, keeping the synthetic corpus honest.
 
 Built incrementally, one reviewable task per section. This file currently covers:
-  1. Tool types/IDs and their chambers.   <-- you are here
-Still to come: subsystems, the alarm/fault code catalog, and failure signatures.
+  1. Tool types/IDs and their chambers.
+  2. Subsystems (shared functional vocabulary).   <-- you are here
+Still to come: the alarm/fault code catalog, and failure signatures.
 """
 
 from __future__ import annotations
@@ -54,6 +55,28 @@ class Tool:
         return tuple(f"{self.tool_id}_{name}" for name in self.chambers)
 
 
+@dataclass(frozen=True)
+class Subsystem:
+    """A functional subsystem shared across tools (RF, vacuum, gas, thermal, ...).
+
+    Subsystems are the connective tissue of the taxonomy: failure signatures (a
+    later task) point symptom -> subsystem -> root cause, so they need stable ids.
+
+    `applies_to` records which module families actually have this subsystem, so an
+    etch-only subsystem (e.g. the bias RF generator) is never attributed to a
+    deposition tool. It defaults to *both* families for the many shared ones.
+
+    Caveat: `applies_to` is coarse (module-type level), so the deposition-only
+    subsystems attach to every deposition tool including PVD — which in reality
+    doesn't use precursors / remote-plasma clean. We keep PVD minimal for v1 and
+    rely on the hand-authored failure signatures to stay tool-accurate.
+    """
+
+    subsystem_id: str                           # canonical id, e.g. "rf_match"
+    name: str                                   # human-readable label
+    applies_to: tuple[str, ...] = MODULE_TYPES  # families that have it; defaults to both
+
+
 # The fab's equipment roster, keyed by tool_id for O(1) lookup.
 # Etch tools use process-module chambers (PM#); the PECVD cluster uses stations
 # (STN#) to mirror real deposition-tool naming — the variety is deliberate so the
@@ -74,11 +97,55 @@ TOOLS: dict[str, Tool] = {
 }
 
 
+# Scope shorthands for subsystems that aren't shared by both families.
+ETCH_ONLY: tuple[str, ...] = ("etch",)
+DEP_ONLY: tuple[str, ...] = ("deposition",)
+
+# Functional subsystems, keyed by subsystem_id. Most are common to both families
+# (default applies_to); a few are specific to etch (bias RF, ESC cooling, optical
+# endpoint) or deposition (heated pedestal, precursor delivery, remote-plasma clean).
+SUBSYSTEMS: dict[str, Subsystem] = {
+    sub.subsystem_id: sub
+    for sub in (
+        # --- Common to etch & deposition ---
+        Subsystem("rf_source", "Source RF generator (power supply)"),
+        Subsystem("rf_match", "RF matcher / match network"),
+        Subsystem("rf_cabling", "RF cabling (fixed length; can fail -> RF issues)"),
+        Subsystem("gas_box", "Gas box - MFCs and flow meters"),
+        Subsystem("gas_injector", "Gas injector / showerhead to chamber"),
+        Subsystem("edge_ring", "Edge ring (consumable, PM-scheduled)"),
+        Subsystem("rough_pump", "Rough / backing pump"),
+        Subsystem("turbo_pump", "Turbomolecular pump"),
+        Subsystem("foreline", "Foreline"),
+        Subsystem("throttle_valve", "Throttle valve (pressure control)"),
+        Subsystem("abatement", "Abatement system"),
+        Subsystem("wafer_handling", "Wafer handling (robot, slit valve)"),
+        # --- Etch only ---
+        Subsystem("esc", "Electrostatic chuck (ESC)", ETCH_ONLY),
+        Subsystem("chiller", "Chiller (ESC temperature control)", ETCH_ONLY),
+        Subsystem("bias_rf_source", "Bias RF generator", ETCH_ONLY),
+        Subsystem("bias_rf_match", "Bias RF matcher", ETCH_ONLY),
+        Subsystem("endpoint_detection", "Optical endpoint detection (EPD)", ETCH_ONLY),
+        # --- Deposition only ---
+        Subsystem("heater_pedestal", "Heated pedestal / susceptor (+ temp control)", DEP_ONLY),
+        Subsystem("precursor_delivery", "Precursor delivery (ampoule/bubbler/vaporizer + heated lines)", DEP_ONLY),
+        Subsystem("remote_plasma", "Remote plasma source (chamber clean)", DEP_ONLY),
+    )
+}
+
+
 if __name__ == "__main__":
     # Human-readable dump so we can eyeball the seed at a glance.
+    print("TOOLS")
     for tool in TOOLS.values():
         print(
-            f"{tool.tool_id:9} {tool.module_type:11} {tool.process_type:11} "
+            f"  {tool.tool_id:9} {tool.module_type:11} {tool.process_type:11} "
             f"{', '.join(tool.chamber_ids())}"
         )
-    print(f"\n{len(TOOLS)} tools total")
+    print(f"  {len(TOOLS)} tools total\n")
+
+    print("SUBSYSTEMS")
+    for sub in SUBSYSTEMS.values():
+        scope = "both" if sub.applies_to == MODULE_TYPES else "/".join(sub.applies_to)
+        print(f"  {sub.subsystem_id:20} {scope:11} {sub.name}")
+    print(f"  {len(SUBSYSTEMS)} subsystems total")
