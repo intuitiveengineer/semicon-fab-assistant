@@ -15,3 +15,8 @@ dependencies = [
 dev = [
     "pytest>=9.1.0",
 ]
+
+[tool.pytest.ini_options]
+# Put the project root on sys.path so tests can `import scripts.taxonomy`.
+pythonpath = ["."]
+testpaths = ["tests"]

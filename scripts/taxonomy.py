@@ -500,6 +500,7 @@ SIGNATURES: dict[str, FailureSignature] = {
 
 if __name__ == "__main__":
     # Human-readable dump so we can eyeball the seed at a glance.
+    # (Consistency is enforced by tests/test_taxonomy.py, not here.)
     print("TOOLS")
     for tool in TOOLS.values():
         print(
@@ -519,42 +520,9 @@ if __name__ == "__main__":
         print(f"  {alarm.code:8} {alarm.subsystem:20} {alarm.text}")
     print(f"  {len(ALARMS)} alarms total")
 
-    # Light sanity check: every alarm must reference a real subsystem id.
-    bad_refs = sorted(a.code for a in ALARMS.values() if a.subsystem not in SUBSYSTEMS)
-    print(f"\n  alarm -> subsystem refs valid: {not bad_refs}"
-          + (f"  (bad: {bad_refs})" if bad_refs else ""))
-
     print("\nFAILURE SIGNATURES")
     for sig in SIGNATURES.values():
         alarm = sig.preceding_alarm or "-"
         print(f"  {sig.signature_id:7} {','.join(sig.tools):16} {alarm:8} "
               f"{sig.root_cause_subsystem:18} {sig.symptom}")
     print(f"  {len(SIGNATURES)} signatures total")
-
-    # Reference + module-scope checks for signatures. (The full self-check is a
-    # later task; this catches authoring slips in the cross-references right now.)
-    problems: list[str] = []
-    for sig in SIGNATURES.values():
-        sub = SUBSYSTEMS.get(sig.root_cause_subsystem)
-        if sub is None:
-            problems.append(f"{sig.signature_id}: unknown subsystem {sig.root_cause_subsystem}")
-        alarm_obj = ALARMS.get(sig.preceding_alarm) if sig.preceding_alarm else None
-        if sig.preceding_alarm and alarm_obj is None:
-            problems.append(f"{sig.signature_id}: unknown alarm {sig.preceding_alarm}")
-        for tool_id in sig.tools:
-            tool = TOOLS.get(tool_id)
-            if tool is None:
-                problems.append(f"{sig.signature_id}: unknown tool {tool_id}")
-                continue
-            # Root cause subsystem must exist on this tool's module family.
-            if sub and tool.module_type not in sub.applies_to:
-                problems.append(f"{sig.signature_id}: {sig.root_cause_subsystem} "
-                                f"not on {tool_id} ({tool.module_type})")
-            # Preceding alarm's subsystem must also exist on this tool.
-            if alarm_obj:
-                asub = SUBSYSTEMS.get(alarm_obj.subsystem)
-                if asub and tool.module_type not in asub.applies_to:
-                    problems.append(f"{sig.signature_id}: alarm {sig.preceding_alarm} "
-                                    f"({alarm_obj.subsystem}) not on {tool_id} ({tool.module_type})")
-    print(f"\n  signature refs + scope valid: {not problems}"
-          + ("\n    " + "\n    ".join(problems) if problems else ""))

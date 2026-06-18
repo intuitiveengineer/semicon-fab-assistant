@@ -276,3 +276,49 @@ plan's examples + domain knowledge, for the user to redline.
 
 **Definition of done:** `uv run python scripts/taxonomy.py` prints `20 signatures total`
 and `signature refs + scope valid: True`. ✓
+
+---
+
+## Step 6 — Taxonomy consistency as pytest (`tests/test_taxonomy.py`)
+
+Promoted the `__main__` "valid: True/False" checks into a real, enforced test suite —
+"we're building real software."
+
+**What we built**
+- `tests/test_taxonomy.py` — parametrized tests covering: each registry is keyed by its
+  own id; tools declare known module/process types and have chambers; subsystem
+  `applies_to` is a non-empty subset of `MODULE_TYPES`; every alarm references a real
+  subsystem; every signature's tools/subsystem/alarm resolve; and signature module
+  scope is consistent (no etch-only subsystem on a dep tool, etc.).
+- `[tool.pytest.ini_options]` in `pyproject.toml`: `pythonpath = ["."]` (so tests can
+  `import scripts.taxonomy`) and `testpaths = ["tests"]`.
+- Removed the two validation blocks from `taxonomy.py`'s `__main__`, keeping only the
+  human-readable dump (now annotated that tests do the enforcing).
+
+**Key things to understand**
+- **Why tests beat `__main__` prints:** the checks now run automatically, fail with a
+  non-zero exit (CI/pre-commit can gate on them), and pinpoint the exact failing item.
+- **`@pytest.mark.parametrize(..., ids=...)`** turns one test into one case *per* tool /
+  alarm / signature, so a failure reports e.g. `SIG-07` by name — far better than a
+  lumped boolean. 234 cases pass (7 tools + 20 subsystems + 60 alarms + 20 signatures
+  across the suites).
+- **`pythonpath = ["."]`** makes the project root importable in tests; `scripts/` works
+  as an implicit namespace package (no `__init__.py` needed on 3.11).
+
+**Decision & why (rejected alternative)**
+- **Tests in `tests/`** over **`assert`s at import time in `taxonomy.py`** — import-time
+  asserts would enforce too, but they crash any import on bad data and mix test logic
+  into the data module. Tests keep concerns separate and run on demand.
+- **Kept the `__main__` dump** rather than deleting it — it's a handy human glance at the
+  seed and isn't a correctness check, so it doesn't belong in the test file.
+
+**What could break**
+- Tests run via `uv run pytest`; they assume the `pythonpath`/`testpaths` config. A
+  future move of `taxonomy.py` out of `scripts/` would need the import path updated.
+
+**Next logical improvement**
+- Merge `feat/taxonomy` to `main`, then start `scripts/generate_data.py` (synthetic
+  corpus) in a fresh session.
+
+**Definition of done:** `uv run pytest` passes (234 cases); `scripts/taxonomy.py` no
+longer prints "valid" lines. ✓
