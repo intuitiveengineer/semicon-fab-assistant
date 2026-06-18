@@ -15,8 +15,9 @@ Why it lives in one file:
 Built incrementally, one reviewable task per section. This file currently covers:
   1. Tool types/IDs and their chambers.
   2. Subsystems (shared functional vocabulary).
-  3. Alarm/fault code catalog.   <-- you are here
-Still to come: failure signatures.
+  3. Alarm/fault code catalog.
+  4. Recurring failure signatures (the planted ground truth).   <-- you are here
+The taxonomy seed is now complete.
 """
 
 from __future__ import annotations
@@ -93,6 +94,30 @@ class AlarmCode:
     text: str                        # short operator-facing description
     subsystem: str                   # a SUBSYSTEMS id this alarm belongs to
     typical_causes: tuple[str, ...]  # plain-language likely causes (feeds diagnosis later)
+
+
+@dataclass(frozen=True)
+class FailureSignature:
+    """A recurring, known failure story: symptom -> root cause -> fix.
+
+    These are the *ground truth* the benchmark grades against. The data generator
+    plants each signature across several documents, so answering a benchmark
+    question requires synthesizing multiple docs (not reading one).
+
+    The subsystem that *reports* (the preceding alarm's subsystem) is often not the
+    one actually broken (`root_cause_subsystem`) — e.g. the RF match throws high
+    reflected power while the real fault is degraded RF cabling. That split is what
+    makes diagnosis non-trivial, and it lets hardware-only subsystems (which raise
+    no alarms) still be root causes.
+    """
+
+    signature_id: str                   # e.g. "SIG-01"
+    tools: tuple[str, ...]              # TOOLS ids where this pattern occurs
+    symptom: str                       # observable behavior
+    root_cause_subsystem: str          # SUBSYSTEMS id where the fault actually lives
+    root_cause: str                    # plain-language cause
+    fix: str                           # corrective action
+    preceding_alarm: str | None = None  # an ALARMS code, if one usually precedes it
 
 
 # The fab's equipment roster, keyed by tool_id for O(1) lookup.
@@ -299,6 +324,180 @@ ALARMS: dict[str, AlarmCode] = {
 }
 
 
+# Recurring failure signatures — the planted ground truth, keyed by signature_id.
+# Each references real TOOLS / SUBSYSTEMS / ALARMS ids. Note the hardware-only root
+# causes (rf_cabling, edge_ring, foreline, gas_injector) that raise no alarm of
+# their own, and the cases where the reporting alarm's subsystem differs from the
+# real root_cause_subsystem.
+SIGNATURES: dict[str, FailureSignature] = {
+    sig.signature_id: sig
+    for sig in (
+        # --- Etch ---
+        FailureSignature(
+            "SIG-01", ("ETCH02",),
+            symptom="Etch-rate drift and across-wafer non-uniformity",
+            root_cause_subsystem="rf_match",
+            root_cause="RF match network instability (worn vacuum capacitor / tuning drift)",
+            fix="Re-tune and service the RF match network",
+            preceding_alarm="ALM-005",
+        ),
+        FailureSignature(
+            "SIG-02", ("ETCH01",),
+            symptom="Intermittent reflected-power trips with etch-rate variation",
+            root_cause_subsystem="rf_cabling",
+            root_cause="Degraded/loose RF cable (out of spec length) causing impedance mismatch",
+            fix="Inspect and replace RF cabling to specified length",
+            preceding_alarm="ALM-005",
+        ),
+        FailureSignature(
+            "SIG-03", ("ETCH02",),
+            symptom="Rising particle counts and wafer defect excursions",
+            root_cause_subsystem="edge_ring",
+            root_cause="Worn/eroded edge ring shedding particles (PM overdue)",
+            fix="Replace edge ring per PM schedule",
+            preceding_alarm=None,
+        ),
+        FailureSignature(
+            "SIG-04", ("ETCH03",),
+            symptom="Wafers fail to dechuck; handoff errors after process",
+            root_cause_subsystem="esc",
+            root_cause="ESC dielectric wear leaving residual clamping charge",
+            fix="Service/replace ESC and verify dechuck sequence",
+            preceding_alarm="ALM-037",
+        ),
+        FailureSignature(
+            "SIG-05", ("ETCH01",),
+            symptom="Center-to-edge non-uniformity with chuck temperature excursions",
+            root_cause_subsystem="chiller",
+            root_cause="Chiller not holding setpoint (low brine level / compressor degradation)",
+            fix="Check chiller brine level and refill if necessary",
+            preceding_alarm="ALM-036",
+        ),
+        FailureSignature(
+            "SIG-06", ("ETCH02",),
+            symptom="Over-etch or early stop; inconsistent endpoint",
+            root_cause_subsystem="endpoint_detection",
+            root_cause="Fouled optical endpoint window / weak emission signal",
+            fix="Clean or replace EPD window; verify detector",
+            preceding_alarm="ALM-047",
+        ),
+        FailureSignature(
+            "SIG-07", ("ETCH03",),
+            symptom="Feature profile/notching variation with bias instability",
+            root_cause_subsystem="bias_rf_match",
+            root_cause="Bias match tuning instability",
+            fix="Service and re-tune the bias match",
+            preceding_alarm="ALM-045",
+        ),
+        FailureSignature(
+            "SIG-08", ("ETCH01",),
+            symptom="Chamber pressure cannot reach/hold setpoint",
+            root_cause_subsystem="throttle_valve",
+            root_cause="Throttle valve sticking from byproduct buildup",
+            fix="Clean/replace throttle valve; verify manometer",
+            preceding_alarm="ALM-022",
+        ),
+        FailureSignature(
+            "SIG-09", ("ETCH02",),
+            symptom="High base pressure and long pumpdown times",
+            root_cause_subsystem="foreline",
+            root_cause="Foreline leak / loose fitting",
+            fix="Leak-check and reseal the foreline",
+            preceding_alarm="ALM-017",
+        ),
+        FailureSignature(
+            "SIG-10", ("ETCH03",),
+            symptom="Process-rate shift with gas-flow alarms",
+            root_cause_subsystem="gas_box",
+            root_cause="MFC drift/aging out of calibration",
+            fix="Recalibrate or replace the MFC",
+            preceding_alarm="ALM-009",
+        ),
+        # --- Deposition ---
+        FailureSignature(
+            "SIG-11", ("CVD02",),
+            symptom="Chamber pressure unstable during deposition",
+            root_cause_subsystem="turbo_pump",
+            root_cause="Failing turbo pump (bearing wear)",
+            fix="Replace/service the turbo pump",
+            preceding_alarm="ALM-018",
+        ),
+        FailureSignature(
+            "SIG-12", ("PECVD01",),
+            symptom="Particle excursions and thickness drift",
+            root_cause_subsystem="gas_injector",
+            root_cause="Corroded/eroded gas injector degrading gas distribution and shedding particles",
+            fix="Inspect injector for corrosion and replace if necessary",
+            preceding_alarm=None,
+        ),
+        FailureSignature(
+            "SIG-13", ("PECVD01",),
+            symptom="Across-wafer thickness/rate non-uniformity",
+            root_cause_subsystem="heater_pedestal",
+            root_cause="Heater zone degradation / pedestal wear",
+            fix="Service/replace heated pedestal; recalibrate zones",
+            preceding_alarm="ALM-051",
+        ),
+        FailureSignature(
+            "SIG-14", ("ALD01",),
+            symptom="Low growth-per-cycle and film non-uniformity",
+            root_cause_subsystem="precursor_delivery",
+            root_cause="Precursor depletion / low ampoule level",
+            fix="Refill/replace ampoule; verify delivery",
+            preceding_alarm="ALM-054",
+        ),
+        FailureSignature(
+            "SIG-15", ("ALD01",),
+            symptom="Particle defects appearing after idle periods",
+            root_cause_subsystem="precursor_delivery",
+            root_cause="Precursor condensation in under-heated delivery line",
+            fix="Inspect lines for insulation damage and replace as necessary",
+            preceding_alarm="ALM-053",
+        ),
+        FailureSignature(
+            "SIG-16", ("PECVD01",),
+            symptom="Run-over-run rising particle counts",
+            root_cause_subsystem="remote_plasma",
+            root_cause="Incomplete chamber clean (remote plasma source underperforming)",
+            fix="Service remote plasma source; verify clean recipe",
+            preceding_alarm="ALM-060",
+        ),
+        FailureSignature(
+            "SIG-17", ("CVD02",),
+            symptom="Deposition-rate drift with flow alarms",
+            root_cause_subsystem="gas_box",
+            root_cause="Failed/clogged MFC or isolation valve",
+            fix="Replace MFC / clear the valve",
+            preceding_alarm="ALM-008",
+        ),
+        FailureSignature(
+            "SIG-18", ("PVD01",),
+            symptom="High base pressure / long pumpdown before deposition",
+            root_cause_subsystem="turbo_pump",
+            root_cause="Turbo pump degradation",
+            fix="Service the turbo pump",
+            preceding_alarm="ALM-017",
+        ),
+        FailureSignature(
+            "SIG-19", ("CVD02",),
+            symptom="Tool down / processing blocked by abatement",
+            root_cause_subsystem="abatement",
+            root_cause="Byproduct buildup causing high abatement backpressure",
+            fix="Service abatement; clear inlet/buildup",
+            preceding_alarm="ALM-027",
+        ),
+        FailureSignature(
+            "SIG-20", ("ETCH02",),
+            symptom="Wafer slip / handoff faults during transfer",
+            root_cause_subsystem="wafer_handling",
+            root_cause="End-effector wear/contamination causing wafer slip",
+            fix="Clean/replace end-effector; recalibrate robot",
+            preceding_alarm="ALM-030",
+        ),
+    )
+}
+
+
 if __name__ == "__main__":
     # Human-readable dump so we can eyeball the seed at a glance.
     print("TOOLS")
@@ -324,3 +523,38 @@ if __name__ == "__main__":
     bad_refs = sorted(a.code for a in ALARMS.values() if a.subsystem not in SUBSYSTEMS)
     print(f"\n  alarm -> subsystem refs valid: {not bad_refs}"
           + (f"  (bad: {bad_refs})" if bad_refs else ""))
+
+    print("\nFAILURE SIGNATURES")
+    for sig in SIGNATURES.values():
+        alarm = sig.preceding_alarm or "-"
+        print(f"  {sig.signature_id:7} {','.join(sig.tools):16} {alarm:8} "
+              f"{sig.root_cause_subsystem:18} {sig.symptom}")
+    print(f"  {len(SIGNATURES)} signatures total")
+
+    # Reference + module-scope checks for signatures. (The full self-check is a
+    # later task; this catches authoring slips in the cross-references right now.)
+    problems: list[str] = []
+    for sig in SIGNATURES.values():
+        sub = SUBSYSTEMS.get(sig.root_cause_subsystem)
+        if sub is None:
+            problems.append(f"{sig.signature_id}: unknown subsystem {sig.root_cause_subsystem}")
+        alarm_obj = ALARMS.get(sig.preceding_alarm) if sig.preceding_alarm else None
+        if sig.preceding_alarm and alarm_obj is None:
+            problems.append(f"{sig.signature_id}: unknown alarm {sig.preceding_alarm}")
+        for tool_id in sig.tools:
+            tool = TOOLS.get(tool_id)
+            if tool is None:
+                problems.append(f"{sig.signature_id}: unknown tool {tool_id}")
+                continue
+            # Root cause subsystem must exist on this tool's module family.
+            if sub and tool.module_type not in sub.applies_to:
+                problems.append(f"{sig.signature_id}: {sig.root_cause_subsystem} "
+                                f"not on {tool_id} ({tool.module_type})")
+            # Preceding alarm's subsystem must also exist on this tool.
+            if alarm_obj:
+                asub = SUBSYSTEMS.get(alarm_obj.subsystem)
+                if asub and tool.module_type not in asub.applies_to:
+                    problems.append(f"{sig.signature_id}: alarm {sig.preceding_alarm} "
+                                    f"({alarm_obj.subsystem}) not on {tool_id} ({tool.module_type})")
+    print(f"\n  signature refs + scope valid: {not problems}"
+          + ("\n    " + "\n    ".join(problems) if problems else ""))

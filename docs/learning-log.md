@@ -222,3 +222,57 @@ to flesh it out to ~60 (the deposition alarms were proposed and confirmed).
 
 **Definition of done:** `uv run python scripts/taxonomy.py` prints `60 alarms total`
 and `alarm -> subsystem refs valid: True`. ✓
+
+---
+
+## Step 5 — Taxonomy: failure signatures (`scripts/taxonomy.py`)
+
+Final task of Milestone 1 — completes the taxonomy seed. These signatures are the
+*ground truth* the benchmark will grade against. Drafted by the assistant from the
+plan's examples + domain knowledge, for the user to redline.
+
+**What we built**
+- A frozen `FailureSignature` dataclass (`signature_id`, `tools`, `symptom`,
+  `root_cause_subsystem`, `root_cause`, `fix`, `preceding_alarm=None`) and a
+  `SIGNATURES` registry of **20 signatures** keyed by id.
+- Extended `__main__` to print signatures and run a **reference + module-scope** check:
+  every `tool`, `root_cause_subsystem`, and `preceding_alarm` must exist, and both the
+  root-cause subsystem and the alarm's subsystem must actually exist on each tool's
+  module family.
+
+**Key things to understand**
+- **This is the linchpin of the whole project.** The generator plants each signature
+  *scattered across multiple documents*, so a benchmark question can only be answered
+  by synthesizing several docs — that's what proves the RAG/agent value later.
+- **Reporting subsystem ≠ broken subsystem.** `preceding_alarm` belongs to the
+  subsystem that *reports*; `root_cause_subsystem` is what's *actually* broken. SIG-02
+  is the canonical case: the RF match reports high reflected power (ALM-005) but the
+  real fault is degraded **RF cabling** (a hardware-only subsystem with no alarm of its
+  own). This gap is the diagnostic challenge.
+- **Hardware-only root causes are covered:** rf_cabling (SIG-02), edge_ring (SIG-03),
+  gas_injector (SIG-12), foreline (SIG-09) — none raise alarms, all are root causes.
+- **`preceding_alarm` is optional** (`None`) — some failures (particle/PM issues) show
+  up as symptoms with no alarm. SIG-03 and SIG-12 model that.
+
+**Decision & why (rejected alternative)**
+- **Signatures reference a list of `tools`** rather than a whole module type — the
+  ground truth is tool-specific and the benchmark verifies per tool. Rejected
+  module-level scoping as too coarse to grade against.
+- **Validated scope in `__main__` now** (not deferred entirely to Task 5's self-check) —
+  hand-authoring 20 cross-referenced entries is exactly where a typo or an etch-only
+  subsystem on a dep tool would slip in; checking immediately caught nothing but proves
+  the seed is internally consistent.
+
+**What could break**
+- Domain accuracy is first-pass — symptoms/causes/fixes are the assistant's draft and
+  the **user's redline is expected**. Structure is stable regardless of wording edits.
+- Scope checks live in `__main__`, not enforced at import (a bad ref wouldn't fail a
+  plain `import`). A dedicated importable self-check is the natural next step.
+
+**Next logical improvement**
+- Milestone 1 is complete. Next: a small importable validator (or pytest) over the whole
+  taxonomy, then Milestone 1's other half — `scripts/generate_data.py` (synthetic
+  corpus) that samples these seeds and plants the signatures across documents.
+
+**Definition of done:** `uv run python scripts/taxonomy.py` prints `20 signatures total`
+and `signature refs + scope valid: True`. ✓
