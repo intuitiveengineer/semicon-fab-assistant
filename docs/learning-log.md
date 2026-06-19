@@ -582,3 +582,55 @@ before root causes are known. The hardest retrieval challenge in the corpus.
 
 **Definition of done:** `uv run python scripts/generate_data.py` writes 124 docs;
 planted shift note for SIG-01 is informal prose with no alarm code; 247 tests pass. ✓
+
+---
+
+## Milestone 2, Step 6 — SOP excerpt generator (`generate_sop_excerpts`)
+
+The fifth and final doc type: procedural reference material indexed by subsystem, not
+by failure event.
+
+**What we built**
+- `_SOP_PROMPT` — generates a 180–250-word OEM-style procedure with fixed headings:
+  PURPOSE / SCOPE / PROCEDURE (numbered steps + thresholds) / ESCALATION. Injects
+  subsystem name, applicable module types, procedure type, and a fake document ID.
+- `_SOP_EXTRA_PROMPT` — shorter tool-specific checklist variant (120–180 words) for
+  process-type-specific SOPs.
+- `_SOP_PROCEDURE_TYPES` — five procedure flavours (inspection, PM, fault response,
+  replacement, calibration) picked by RNG so not all SOPs read the same.
+- `generate_sop_excerpts(dry_run=False)` — 20 primary SOPs (one per subsystem) +
+  15 tool-specific extras = 35 docs. Corpus: 159 docs total.
+
+**Key things to understand**
+- **SOPs are the "recommended checks" source.** When the agent proposes next actions
+  in its structured output (`recommended_checks`), it should be citing SOP procedures.
+  A retrieved RF match SOP tells the agent to "verify impedance at 50 ± 2 Ω" — a
+  concrete, actionable check it wouldn't generate from general knowledge alone.
+- **SOPs are subsystem-indexed, not event-indexed.** Every subsystem has reference
+  material regardless of whether it appears in a failure signature. This prevents the
+  retriever from only returning docs that mention the failure — sometimes the most useful
+  retrieved doc is a procedure, not a maintenance record.
+- **`tool_id: None` on primary SOPs.** Subsystem SOPs apply across tools of the right
+  module type, not to one specific tool. Setting `tool_id` to `None` means the Qdrant
+  filter won't accidentally exclude them when the agent queries by tool — they'll always
+  be in the pool for semantic retrieval. The 15 extras do carry a `tool_id` since they
+  are process-specific.
+- **159 docs is below the 300–350 target.** All five doc types are now seeded. The gap
+  to target is filled in Step 7 (volume boost) by increasing distractor counts — no new
+  doc types needed.
+
+**Decision & why (rejected alternative)**
+- **One SOP per subsystem** over one per signature — SOPs are reference material, not
+  incident records. Tying them to signatures would mean most subsystems have no SOP and
+  we'd miss the "recommended checks" retrieval case entirely.
+- **Two-tier structure (primary + tool-specific extras)** over just 20 generic SOPs —
+  tool-specific checklists add realistic variety and give the retriever something more
+  specific to return when the query names a tool like "ALD01 precursor delivery."
+
+**What could break**
+- Primary SOPs have `tool_id: None`. The existing test suite checks tool_id is in
+  `TOOLS` only for tool_summary docs, so this is fine. A future test for SOP docs
+  should allow `None` explicitly.
+
+**Definition of done:** `uv run python scripts/generate_data.py` writes 159 docs;
+RF match SOP contains numbered steps with numeric thresholds; 247 tests pass. ✓

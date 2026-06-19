@@ -579,6 +579,150 @@ def generate_shift_notes(dry_run: bool = False) -> list[dict]:
     return docs
 
 # ---------------------------------------------------------------------------
+# Generator: SOP / manual excerpts  (subsystem-indexed reference material)
+# ---------------------------------------------------------------------------
+
+_SOP_PROMPT = """\
+You are a semiconductor fab process engineer writing an OEM-style standard operating \
+procedure excerpt.
+
+Subsystem: {subsystem_name}
+Applicable equipment: {applies_to_str}
+Procedure type: {procedure_type}
+Document ID: {sop_ref}
+Revision date: {date}
+
+Write an SOP excerpt of 180–250 words. Use the following headings exactly:
+
+PURPOSE:
+(one sentence — what this procedure achieves)
+
+SCOPE:
+(which equipment or module types this applies to)
+
+PROCEDURE:
+(5–8 numbered steps with specific check criteria, threshold values, and pass/fail \
+conditions — invent plausible but realistic numeric values)
+
+ESCALATION:
+(when to stop and call engineering support)
+
+Formal technical language only. No narrative prose.\
+"""
+
+_SOP_PROCEDURE_TYPES = [
+    "Inspection and check procedure",
+    "Routine preventive maintenance checklist",
+    "Fault response procedure",
+    "Component replacement procedure",
+    "Calibration and verification procedure",
+]
+
+
+def generate_sop_excerpts(dry_run: bool = False) -> list[dict]:
+    """SOP / manual excerpt docs: one per subsystem, plus tool-specific extras."""
+    docs = []
+    used_date = _random_date_before(days_max=730, days_min=90)  # revision dates ~months ago
+
+    # --- Primary: one SOP per subsystem ---
+    for sub_id, sub in SUBSYSTEMS.items():
+        applies_str = " and ".join(sub.applies_to) + " equipment"
+        procedure_type = rng.choice(_SOP_PROCEDURE_TYPES)
+        sop_ref = f"SOP-{sub_id.upper().replace('_', '-')}-{rng.randint(100, 999)}"
+        rev_date = _random_date_before(days_max=730, days_min=90)
+
+        text = (
+            f"[dry-run] Would generate SOP for {sub_id} ({procedure_type})"
+            if dry_run
+            else _llm_call(_SOP_PROMPT.format(
+                subsystem_name=sub.name,
+                applies_to_str=applies_str,
+                procedure_type=procedure_type,
+                sop_ref=sop_ref,
+                date=rev_date,
+            ))
+        )
+
+        docs.append({
+            "doc_id": f"SOP-{sub_id}",
+            "doc_type": "sop_excerpt",
+            "tool_id": None,
+            "chamber": None,
+            "alarm_codes": [],
+            "subsystem": sub_id,
+            "date": rev_date,
+            "text": text,
+            "metadata": {
+                "subsystem": sub_id,
+                "subsystem_name": sub.name,
+                "applies_to": list(sub.applies_to),
+                "procedure_type": procedure_type,
+                "sop_ref": sop_ref,
+                "date": rev_date,
+            },
+        })
+
+    # --- Extras: tool-process-specific checklists for variety ---
+    _SOP_EXTRA_PROMPT = """\
+You are a semiconductor fab process engineer writing a tool-specific maintenance \
+checklist excerpt.
+
+Tool: {tool_id} ({process_type} {module_type})
+Subsystem: {subsystem_name}
+Document ID: {sop_ref}
+Revision date: {date}
+
+Write a concise tool-specific checklist of 120–180 words with these sections:
+
+PURPOSE: (one sentence)
+CHECKLIST: (6–9 numbered check items with pass/fail criteria and numeric thresholds \
+specific to {process_type} equipment)
+NOTES: (1–2 sentences on common pitfalls for this tool type)
+
+Formal technical language. No narrative.\
+"""
+
+    for i in range(15):
+        tool_id, tool = rng.choice(list(TOOLS.items()))
+        sub = rng.choice([s for s in SUBSYSTEMS.values() if tool.module_type in s.applies_to])
+        sop_ref = f"SOP-{tool_id}-{sub.subsystem_id.upper().replace('_', '-')}-{rng.randint(10, 99)}"
+        rev_date = _random_date_before(days_max=730, days_min=90)
+
+        text = (
+            f"[dry-run] Would generate tool-specific SOP for {tool_id} / {sub.subsystem_id}"
+            if dry_run
+            else _llm_call(_SOP_EXTRA_PROMPT.format(
+                tool_id=tool_id,
+                process_type=tool.process_type,
+                module_type=tool.module_type,
+                subsystem_name=sub.name,
+                sop_ref=sop_ref,
+                date=rev_date,
+            ))
+        )
+
+        docs.append({
+            "doc_id": f"SOP-EXTRA-{i:03d}",
+            "doc_type": "sop_excerpt",
+            "tool_id": tool_id,
+            "chamber": None,
+            "alarm_codes": [],
+            "subsystem": sub.subsystem_id,
+            "date": rev_date,
+            "text": text,
+            "metadata": {
+                "tool_id": tool_id,
+                "subsystem": sub.subsystem_id,
+                "subsystem_name": sub.name,
+                "procedure_type": "tool-specific checklist",
+                "sop_ref": sop_ref,
+                "date": rev_date,
+            },
+        })
+
+    return docs
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -632,6 +776,12 @@ def main() -> None:
     if not dry_run:
         write_corpus(shift_docs)
     print(f"  {len(shift_docs)} docs")
+
+    print("Generating SOP excerpts...")
+    sop_docs = generate_sop_excerpts(dry_run=dry_run)
+    if not dry_run:
+        write_corpus(sop_docs)
+    print(f"  {len(sop_docs)} docs")
 
     if not dry_run:
         total = sum(1 for _ in CORPUS_FILE.open())
