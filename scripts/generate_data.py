@@ -248,7 +248,7 @@ def generate_alarm_logs(dry_run: bool = False) -> list[dict]:
 
     # --- Distractors: random tool + alarm, not tied to any signature ---
     all_alarm_codes = list(ALARMS)
-    for i in range(22):
+    for i in range(110):
         tool_id, tool = rng.choice(list(TOOLS.items()))
         alarm_code = rng.choice(all_alarm_codes)
         alarm = ALARMS[alarm_code]
@@ -402,7 +402,7 @@ Keep it 6–10 sentences total. Be specific and technical.\
 """
 
     all_subs = list(SUBSYSTEMS.values())
-    for i in range(20):
+    for i in range(70):
         tool_id, tool = rng.choice(list(TOOLS.items()))
         sub = rng.choice([s for s in all_subs if tool.module_type in s.applies_to])
         chamber = rng.choice(tool.chamber_ids())
@@ -538,7 +538,7 @@ def generate_shift_notes(dry_run: bool = False) -> list[dict]:
 
     # --- Distractors: routine observations, no signature facts ---
     all_subs = list(SUBSYSTEMS.values())
-    for i in range(20):
+    for i in range(70):
         tool_id, tool = rng.choice(list(TOOLS.items()))
         sub = rng.choice([s for s in all_subs if tool.module_type in s.applies_to])
         chamber = rng.choice(tool.chamber_ids())
@@ -682,7 +682,7 @@ NOTES: (1–2 sentences on common pitfalls for this tool type)
 Formal technical language. No narrative.\
 """
 
-    for i in range(15):
+    for i in range(35):
         tool_id, tool = rng.choice(list(TOOLS.items()))
         sub = rng.choice([s for s in SUBSYSTEMS.values() if tool.module_type in s.applies_to])
         sop_ref = f"SOP-{tool_id}-{sub.subsystem_id.upper().replace('_', '-')}-{rng.randint(10, 99)}"
@@ -721,6 +721,42 @@ Formal technical language. No narrative.\
         })
 
     return docs
+
+# ---------------------------------------------------------------------------
+# Validation gate  (taxonomy allow-list check on the assembled corpus)
+# ---------------------------------------------------------------------------
+
+def validate_corpus(path: Path = CORPUS_FILE) -> list[str]:
+    """Read every doc in the corpus JSONL and return a list of violation strings.
+
+    Checks:
+    - tool_id (when not None) must exist in TOOLS
+    - every alarm code in alarm_codes must exist in ALARMS
+    """
+    errors: list[str] = []
+    if not path.exists():
+        return [f"Corpus file not found: {path}"]
+
+    for lineno, line in enumerate(path.open(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            doc = json.loads(line)
+        except json.JSONDecodeError as exc:
+            errors.append(f"line {lineno}: invalid JSON — {exc}")
+            continue
+
+        doc_id = doc.get("doc_id", f"<line {lineno}>")
+
+        if doc.get("tool_id") is not None and doc["tool_id"] not in TOOLS:
+            errors.append(f"{doc_id}: unknown tool_id '{doc['tool_id']}'")
+
+        for code in doc.get("alarm_codes", []):
+            if code not in ALARMS:
+                errors.append(f"{doc_id}: unknown alarm_code '{code}'")
+
+    return errors
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -786,6 +822,13 @@ def main() -> None:
     if not dry_run:
         total = sum(1 for _ in CORPUS_FILE.open())
         print(f"\nCorpus total: {total} docs → {CORPUS_FILE}")
+        errors = validate_corpus()
+        if errors:
+            print(f"\nValidation FAILED — {len(errors)} error(s):")
+            for e in errors:
+                print(f"  {e}")
+            raise SystemExit(1)
+        print("Validation passed — all taxonomy references valid.")
 
 
 if __name__ == "__main__":

@@ -634,3 +634,46 @@ by failure event.
 
 **Definition of done:** `uv run python scripts/generate_data.py` writes 159 docs;
 RF match SOP contains numbered steps with numeric thresholds; 247 tests pass. ✓
+
+---
+
+## Milestone 2, Step 7 — Volume boost + validation gate
+
+Final step of Milestone 2. Brings corpus to target size and enforces taxonomy
+consistency as a hard gate on every generation run.
+
+**What we built**
+- Increased distractor loop counts: alarm logs 22 → 110 iterations (~85 pass scope
+  filter), work orders 20 → 70, shift notes 20 → 70, SOP extras 15 → 35.
+- `validate_corpus(path)` — reads every line of corpus.jsonl and checks: `tool_id`
+  (when not None) is in `TOOLS`; every entry in `alarm_codes` is in `ALARMS`. Returns
+  a list of violation strings; empty list = clean.
+- `main()` calls `validate_corpus()` after generation and exits non-zero on any
+  violation — making the gate automatic on every full run.
+- `TestCorpusValidation` in `tests/test_generate_data.py` (4 cases, skipif corpus
+  absent): no taxonomy violations, ≥300 docs, all envelope fields present, unique
+  doc_ids. 251 total tests pass.
+- Final corpus: **345 docs** — 7 tool summaries + 103 alarm logs + 90 work orders +
+  90 shift notes + 55 SOPs.
+
+**Key things to understand**
+- **The validation gate closes the consistency loop.** The taxonomy is the allow-list;
+  the generator is the writer; the gate is the enforcer. Without it, an LLM that
+  hallucinated "ALM-999" or "ETCH09" would silently corrupt the corpus. With it, bad
+  refs fail the run loudly and get fixed before any doc reaches Qdrant.
+- **Volume vs planted ratio.** Of 345 docs, 80 are planted signal (20 alarm logs +
+  20 work orders + 20 shift notes + 20 tool summaries that reference signature issues)
+  and 265 are noise. That's roughly a 1:3 signal-to-noise ratio — realistic for a
+  working retrieval benchmark where recall isn't trivially easy.
+- **Skipping corpus tests when the file doesn't exist** (`pytest.mark.skipif`) is the
+  right pattern for tests that depend on generated artifacts. It keeps `uv run pytest`
+  clean for anyone who hasn't run the generator yet, without hiding the tests.
+
+**Decision & why (rejected alternative)**
+- **Validation at generation time** (called from `main()`) over **validation only in
+  pytest** — the generator is the production path; catching violations there prevents
+  bad docs from ever being written to the corpus. The pytest is a second line of
+  defence, not the primary one.
+
+**Definition of done:** `uv run python scripts/generate_data.py` writes 345 docs and
+prints "Validation passed"; `uv run pytest` → 251 passed. Milestone 2 complete. ✓
