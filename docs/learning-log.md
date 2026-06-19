@@ -322,3 +322,93 @@ Promoted the `__main__` "valid: True/False" checks into a real, enforced test su
 
 **Definition of done:** `uv run pytest` passes (234 cases); `scripts/taxonomy.py` no
 longer prints "valid" lines. ✓
+
+---
+
+## Milestone 2, Step 1 — Generator scaffold (`scripts/generate_data.py`, `data/` dirs)
+
+First task of Milestone 2 (synthetic corpus). Establishes the skeleton before any LLM
+calls are made.
+
+**What we built**
+- `scripts/generate_data.py` — module with `--dry-run` / `--seed` CLI args and a
+  module-level `rng = random.Random(SEED)` instance (seed 42).
+- `data/{raw,corpus,structured}/` — output directories tracked via `.gitkeep`; contents
+  gitignored so generated files never land in version control.
+- Updated `.gitignore`: `data/raw/*` / `data/corpus/*` / `data/structured/*` with
+  `!.gitkeep` exceptions — ignores *contents*, not the directory itself.
+
+**Key things to understand**
+- **`data/raw/`** will cache one file per LLM call. On a rerun, we skip cached calls so
+  we only pay the API once. `data/corpus/corpus.jsonl` is the final assembled corpus;
+  `data/structured/` holds non-LLM records (tool summaries) in tidy JSON for the agent
+  tool layer.
+- **`data/raw/*` vs `data/raw/`:** gitignoring a *directory* blocks all `!exceptions`
+  inside it. Using `/*` ignores the *contents* instead, which lets `!.gitkeep` work.
+  A subtle but important `.gitignore` behaviour.
+- **Seeded RNG:** constructing `random.Random(SEED)` at module level means every import
+  gets the same starting state. Re-seeding in `main()` via `--seed` overrides for
+  experiments without touching the global default.
+
+**Decision & why (rejected alternative)**
+- `sys.path` manipulation at the top of the script (`sys.path.insert(0, str(_ROOT))`)
+  rather than running via `python -m scripts.generate_data` — keeps the familiar
+  `uv run python scripts/generate_data.py` invocation consistent with the rest of the
+  project.
+
+**What could break**
+- Nothing in this step calls the LLM or writes real corpus content; all risk is deferred.
+
+**Definition of done:** `--dry-run` prints plan; bare run prints "not yet implemented";
+dirs exist; no unintended files staged. ✓
+
+---
+
+## Milestone 2, Step 2 — Tool summary generator (`generate_tool_summaries`)
+
+First real generator — no LLM, pure taxonomy-to-document transform. Proves the document
+envelope before spending API credits.
+
+**What we built**
+- `generate_tool_summaries()` in `scripts/generate_data.py`: one doc per tool (7 total),
+  MTBF + last-PM date from seeded RNG, open issues anchored to the tool's failure
+  signatures (60% of the time) or a random applicable subsystem (40%).
+- `write_corpus()` helper: appends JSON lines to `data/corpus/corpus.jsonl`.
+- `data/structured/tool_summaries.json`: the raw structured records written separately
+  for the agent tool layer (no `text` field — just the machine-readable payload).
+- `tests/test_generate_data.py` (13 cases): one doc per tool, unique IDs, all envelope
+  fields present, chambers match taxonomy, JSON-serialisable.
+
+**Key things to understand**
+- **`text` vs `metadata` — two jobs, same document.**
+  `text` is prose written for the embedding model: it's what semantic search runs
+  against, so converting structured data to clear sentences here ("MTBF: 70 days" →
+  "Mean time between failures (MTBF): 70 days.") directly affects retrieval quality.
+  `metadata` stays structured and lands in Qdrant as a payload — never embedded, only
+  filtered (e.g., `tool_id = "ETCH02"`). Together they give best-of-both-worlds:
+  semantic recall + exact structured filtering.
+- **Document envelope fields** (every corpus doc has these): `doc_id`, `doc_type`,
+  `tool_id`, `chamber`, `alarm_codes`, `subsystem`, `date`, `text`, `metadata`.
+  Consistency here is what makes the ingest pipeline simple: one schema, five doc types.
+- **Open issues tied to signatures:** when a tool has a known failure signature (e.g.,
+  ETCH02 / RF instability), there's a 60% chance its open-issue text references that
+  signature's symptom and subsystem. This means benchmark-relevant clues appear even in
+  tool summary docs — another path for the retriever to find corroborating evidence.
+
+**Decision & why (rejected alternative)**
+- **Tool summaries first** over any LLM-backed doc type — zero API cost, zero network
+  failure surface. Proves the envelope shape and test harness before we introduce
+  variability. Rejected starting with alarm logs (second simplest): they do need minimal
+  LLM templating and would have mixed two concerns in the first real step.
+- **Corpus wiped on each full run** (`CORPUS_FILE.write_text("")`) — the corpus is fully
+  deterministic from the seed, so there's no value in appending; a fresh run should
+  always produce the same output. Rejected append-only: stale docs from a previous
+  partial run would corrupt the benchmark.
+
+**What could break**
+- `data/corpus/corpus.jsonl` is truncated at the start of `main()`. A crash mid-run
+  leaves a partial corpus. Later steps will add a staging / atomic-write pattern if
+  needed.
+
+**Definition of done:** `uv run python scripts/generate_data.py` writes 7 docs;
+`uv run pytest` passes (247 cases, 13 new). ✓
