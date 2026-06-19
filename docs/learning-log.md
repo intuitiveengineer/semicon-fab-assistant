@@ -412,3 +412,72 @@ envelope before spending API credits.
 
 **Definition of done:** `uv run python scripts/generate_data.py` writes 7 docs;
 `uv run pytest` passes (247 cases, 13 new). ✓
+
+---
+
+## Milestone 2, Step 3 — Alarm log generator (`generate_alarm_logs`)
+
+First LLM-backed generator. Produces machine-formatted alarm event logs; plants the
+`preceding_alarm` from each failure signature into the corpus.
+
+**What we built**
+- `_cache_path(prompt)` — hashes the prompt (SHA-256, first 20 hex chars) to a filename
+  in `data/raw/`. Used by `_llm_call()`.
+- `_llm_call(prompt, model)` — calls `gpt-4o-mini`, writes raw response to cache, returns
+  cached content on reruns. Lazy-imports `config` and `openai` so dry-run never touches
+  the API or validates the key.
+- `_ALARM_LOG_PROMPT` — template injecting tool_id, chamber, alarm_code, alarm text,
+  subsystem name, typical causes, and datetime. LLM writes terse pipe-delimited log lines
+  with plausible sensor readings; we supply all taxonomy facts.
+- `generate_alarm_logs(dry_run=False)` — 18 planted docs (one per signature×tool that
+  has a `preceding_alarm`) + up to 22 distractors (random tool+alarm pairs, skipped when
+  the alarm's subsystem doesn't apply to the tool's module type). Total: 37 docs.
+- `main()` refactored to pass `dry_run` through to each generator; dry-run now prints
+  planned doc counts without writing files or calling the API.
+
+**Key things to understand**
+- **LLM as a prose writer, not a fact inventor.** Every taxonomy entity (tool_id,
+  chamber, alarm_code, subsystem) is injected by us into the prompt. The model varies
+  phrasing and invents plausible sensor values — the two things it's good at. If we let
+  the model choose alarm codes, it would hallucinate codes outside our taxonomy,
+  breaking the validation gate we'll add later.
+- **The raw cache pattern.** Each LLM response is stored as a JSON file keyed by prompt
+  hash. A rerun with the same seed skips every API call — the corpus is free to
+  regenerate after the first run. This is the same pattern production ML pipelines use
+  for expensive preprocessing. The `data/raw/` directory is gitignored, so the cache
+  is local only.
+- **Planted vs distractor.** `is_planted: True` in metadata marks docs that contain
+  deliberate signature evidence. Distractors are real-alarm-code events on real tools
+  but not tied to any signature — they make retrieval harder (the model must distinguish
+  relevant from plausible-but-irrelevant). Both types are necessary for the benchmark
+  to be meaningful.
+- **Scope filtering for distractors.** When picking a random alarm for a distractor,
+  we skip the combination if the alarm's subsystem doesn't apply to the tool's module
+  type (e.g., don't assign an etch-only ESC alarm to PECVD01). This respects the
+  taxonomy's `applies_to` logic and keeps generated text physically plausible.
+
+**Decision & why (rejected alternative)**
+- **`gpt-4o-mini` for generation** over `gpt-4o` — the alarm log format is tightly
+  constrained by the prompt (pipe-delimited, terse, numeric values). Mini handles this
+  well and costs ~20× less; the quality difference appears only in open-ended prose where
+  we'd use a larger model anyway. Easy to swap via `_llm_call(model=...)`.
+- **Lazy config/openai import inside `_llm_call`** over top-level import — keeps
+  dry-run clean (no key validation, no import cost) and keeps the module importable in
+  tests without a valid `.env`.
+- **One alarm log per signature×tool** over batching multiple alarms per doc — keeps
+  each doc focused on one event and one alarm code, which simplifies metadata tagging
+  and retrieval filtering. A single-alarm doc is also a cleaner unit for the chunker
+  (Milestone 3) to handle.
+
+**What could break**
+- LLM output format varies slightly between calls even at temperature 0.7. The cache
+  locks it in after the first run, but a cache-clear rerun may produce slightly different
+  text (not a problem for the benchmark since we score on metadata fields, not exact
+  text).
+- Distractor count can be <22 if many random picks are skipped by scope filtering.
+  Currently yields 19 distractors. Acceptable for now; can be bumped by increasing the
+  loop count.
+
+**Definition of done:** `uv run python scripts/generate_data.py` writes 44 docs (7
+tool summaries + 37 alarm logs); all 37 LLM outputs cached in `data/raw/`; 247 tests
+pass. ✓
