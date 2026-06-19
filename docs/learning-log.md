@@ -481,3 +481,58 @@ First LLM-backed generator. Produces machine-formatted alarm event logs; plants 
 **Definition of done:** `uv run python scripts/generate_data.py` writes 44 docs (7
 tool summaries + 37 alarm logs); all 37 LLM outputs cached in `data/raw/`; 247 tests
 pass. ✓
+
+---
+
+## Milestone 2, Step 4 — Work order generator (`generate_work_orders`)
+
+The most information-dense doc type: contains the root cause and fix from each failure
+signature — the "answer" half of the benchmark.
+
+**What we built**
+- `_WORK_ORDER_PROMPT` — template injecting tool_id, chamber, process_type, dates,
+  technician, symptom, root_cause_subsystem, root_cause, and fix. LLM writes in four
+  fixed sections: PROBLEM DESCRIPTION / FINDINGS / ACTIONS TAKEN / RESULT.
+- `_DISTRACTOR_WO_PROMPT` — lighter template for routine PM checks on a random subsystem;
+  no signature facts injected.
+- `generate_work_orders(dry_run=False)` — 20 planted docs (one per signature, tool and
+  chamber chosen by seeded RNG) + 20 distractor routine maintenance docs. Total: 40 docs.
+- Corpus: 84 docs total after this step (7 + 37 + 40).
+
+**Key things to understand**
+- **Work orders complete the evidence triangle.** For signatures with a `preceding_alarm`:
+  the alarm log doc shows *that* the alarm fired; the work order shows *what was found and
+  fixed*. Together they are the multi-document chain the agent must synthesize to answer
+  "what caused the etch-rate drift on ETCH02?" — neither doc alone is sufficient.
+- **Planted work orders reference the alarm code in metadata.** `alarm_codes` on a planted
+  WO is set to `[sig.preceding_alarm]` when one exists. This lets the retriever find WOs
+  by alarm code even though the alarm code may not appear in the prose text (the LLM was
+  told not to invent codes). Metadata filtering is doing work here that semantic search
+  alone can't.
+- **Distractor WOs use a separate lighter prompt.** Injecting full signature facts into a
+  distractor would accidentally plant evidence. A separate prompt for distractors keeps
+  them realistic (real fab maintenance language) without carrying benchmark-relevant
+  answers.
+- **The cache means reruns are free.** All 37 alarm log calls hit cache; only the 40 work
+  order calls were new API calls this run. After this run those 40 are also cached.
+
+**Decision & why (rejected alternative)**
+- **Fixed section headings (PROBLEM DESCRIPTION / FINDINGS / etc.)** over free-form prose
+  — headings give the chunker (Milestone 3) clean split points and make it easier for the
+  agent to cite which section the evidence came from. Free-form prose is harder to parse
+  and would require smarter chunking later.
+- **One planted WO per signature** (not one per signature×tool) — work orders capture the
+  root cause + fix, which is the same regardless of which specific tool surfaced the
+  failure. Generating duplicates per tool would dilute the benchmark signal. Alarm logs
+  got one-per-tool because alarms fire on specific chambers; diagnoses are shared.
+
+**What could break**
+- The LLM occasionally bolds headings (`**FINDINGS:**`) rather than plain text. This is
+  cosmetic and doesn't affect retrieval. The chunker will strip markdown if needed.
+- Distractor WO doc_ids are `WO-DIST-000` through `WO-DIST-019`. If the distractor loop
+  count ever changes, these ids shift — not a problem now, but worth noting if we add
+  id-based lookups later.
+
+**Definition of done:** `uv run python scripts/generate_data.py` writes 84 docs (7 + 37
++ 40); planted WO for SIG-01 contains correct symptom/root-cause/fix prose; 247 tests
+pass. ✓

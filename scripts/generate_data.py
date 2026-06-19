@@ -285,6 +285,171 @@ def generate_alarm_logs(dry_run: bool = False) -> list[dict]:
     return docs
 
 # ---------------------------------------------------------------------------
+# Generator: maintenance work orders  (LLM-backed; plants root_cause + fix)
+# ---------------------------------------------------------------------------
+
+_WORK_ORDER_PROMPT = """\
+You are a semiconductor fab maintenance technician writing up a completed work order.
+
+Tool ID: {tool_id}
+Chamber: {chamber}
+Process type: {process_type}
+Work order number: {wo_num}
+Opened: {open_date}
+Closed: {close_date}
+Technician: {tech}
+Reported symptom: {symptom}
+Root cause subsystem: {root_cause_subsystem}
+Root cause: {root_cause}
+Fix applied: {fix}
+
+Write a realistic maintenance work order with these sections (use the exact headings):
+
+PROBLEM DESCRIPTION:
+(1–2 sentences — what the operator reported)
+
+FINDINGS:
+(2–4 sentences — what the technician found on inspection; reference the root cause \
+subsystem and specific observations like measurements or visual findings)
+
+ACTIONS TAKEN:
+(2–3 sentences — what was replaced, adjusted, or cleaned; reference the fix)
+
+RESULT:
+(1 sentence — whether process parameters recovered after the repair)
+
+Be specific and technical. Use realistic fab language. Do not invent tool IDs, alarm \
+codes, or subsystem names beyond what is provided.\
+"""
+
+_TECH_NAMES = ["J. Park", "M. Torres", "S. Nguyen", "R. Patel", "A. Kim", "L. Chen", "D. Okafor"]
+
+
+def generate_work_orders(dry_run: bool = False) -> list[dict]:
+    """Work order docs: one planted per signature (all 20), plus random distractors."""
+    docs = []
+
+    # --- Planted: one work order per signature (covers root_cause + fix) ---
+    for sig_id, sig in SIGNATURES.items():
+        tool_id = rng.choice(sig.tools)
+        tool = TOOLS[tool_id]
+        chamber = rng.choice(tool.chamber_ids())
+        close_date = _random_date_before(days_max=150, days_min=14)
+        open_dt = datetime.date.fromisoformat(close_date) - datetime.timedelta(days=rng.randint(1, 3))
+        open_date = open_dt.isoformat()
+        wo_num = f"WO-{rng.randint(10000, 99999)}"
+        tech = rng.choice(_TECH_NAMES)
+        sub = SUBSYSTEMS.get(sig.root_cause_subsystem)
+        sub_name = sub.name if sub else sig.root_cause_subsystem
+
+        text = (
+            f"[dry-run] Would generate work order for {sig_id} on {tool_id}/{chamber}"
+            if dry_run
+            else _llm_call(_WORK_ORDER_PROMPT.format(
+                tool_id=tool_id,
+                chamber=chamber,
+                process_type=tool.process_type,
+                wo_num=wo_num,
+                open_date=open_date,
+                close_date=close_date,
+                tech=tech,
+                symptom=sig.symptom,
+                root_cause_subsystem=sub_name,
+                root_cause=sig.root_cause,
+                fix=sig.fix,
+            ))
+        )
+
+        alarm_codes = [sig.preceding_alarm] if sig.preceding_alarm else []
+        docs.append({
+            "doc_id": f"WO-{sig_id}-{tool_id}",
+            "doc_type": "work_order",
+            "tool_id": tool_id,
+            "chamber": chamber,
+            "alarm_codes": alarm_codes,
+            "subsystem": sig.root_cause_subsystem,
+            "date": close_date,
+            "text": text,
+            "metadata": {
+                "tool_id": tool_id,
+                "chamber": chamber,
+                "alarm_codes": alarm_codes,
+                "subsystem": sig.root_cause_subsystem,
+                "date": close_date,
+                "wo_number": wo_num,
+                "technician": tech,
+                "signature_id": sig_id,
+                "is_planted": True,
+            },
+        })
+
+    # --- Distractors: random tool + subsystem, generic maintenance language ---
+    _DISTRACTOR_WO_PROMPT = """\
+You are a semiconductor fab maintenance technician writing up a routine work order.
+
+Tool ID: {tool_id}
+Chamber: {chamber}
+Process type: {process_type}
+Work order number: {wo_num}
+Opened: {open_date}
+Closed: {close_date}
+Technician: {tech}
+Subsystem serviced: {subsystem_name}
+
+Write a short realistic routine maintenance work order (PM check or minor repair) \
+with sections: PROBLEM DESCRIPTION, FINDINGS, ACTIONS TAKEN, RESULT.
+Keep it 6–10 sentences total. Be specific and technical.\
+"""
+
+    all_subs = list(SUBSYSTEMS.values())
+    for i in range(20):
+        tool_id, tool = rng.choice(list(TOOLS.items()))
+        sub = rng.choice([s for s in all_subs if tool.module_type in s.applies_to])
+        chamber = rng.choice(tool.chamber_ids())
+        close_date = _random_date_before(days_max=150, days_min=14)
+        open_dt = datetime.date.fromisoformat(close_date) - datetime.timedelta(days=rng.randint(1, 2))
+        wo_num = f"WO-{rng.randint(10000, 99999)}"
+        tech = rng.choice(_TECH_NAMES)
+
+        text = (
+            f"[dry-run] Would generate distractor work order on {tool_id}/{chamber} ({sub.name})"
+            if dry_run
+            else _llm_call(_DISTRACTOR_WO_PROMPT.format(
+                tool_id=tool_id,
+                chamber=chamber,
+                process_type=tool.process_type,
+                wo_num=wo_num,
+                open_date=open_dt.isoformat(),
+                close_date=close_date,
+                tech=tech,
+                subsystem_name=sub.name,
+            ))
+        )
+
+        docs.append({
+            "doc_id": f"WO-DIST-{i:03d}",
+            "doc_type": "work_order",
+            "tool_id": tool_id,
+            "chamber": chamber,
+            "alarm_codes": [],
+            "subsystem": sub.subsystem_id,
+            "date": close_date,
+            "text": text,
+            "metadata": {
+                "tool_id": tool_id,
+                "chamber": chamber,
+                "alarm_codes": [],
+                "subsystem": sub.subsystem_id,
+                "date": close_date,
+                "wo_number": wo_num,
+                "technician": tech,
+                "is_planted": False,
+            },
+        })
+
+    return docs
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -326,6 +491,12 @@ def main() -> None:
     if not dry_run:
         write_corpus(alarm_docs)
     print(f"  {len(alarm_docs)} docs")
+
+    print("Generating work orders...")
+    wo_docs = generate_work_orders(dry_run=dry_run)
+    if not dry_run:
+        write_corpus(wo_docs)
+    print(f"  {len(wo_docs)} docs")
 
     if not dry_run:
         total = sum(1 for _ in CORPUS_FILE.open())
