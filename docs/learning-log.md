@@ -536,3 +536,49 @@ signature — the "answer" half of the benchmark.
 **Definition of done:** `uv run python scripts/generate_data.py` writes 84 docs (7 + 37
 + 40); planted WO for SIG-01 contains correct symptom/root-cause/fix prose; 247 tests
 pass. ✓
+
+---
+
+## Milestone 2, Step 5 — Shift note generator (`generate_shift_notes`)
+
+The "tribal knowledge" doc type: informal first-person observations written at shift end,
+before root causes are known. The hardest retrieval challenge in the corpus.
+
+**What we built**
+- `_SHIFT_NOTE_PROMPT` — instructs the LLM to write as a tired technician briefing the
+  incoming crew: natural prose, no alarm codes, no headings, 3–6 sentences. Injects
+  tool, chamber, symptom, and subsystem of concern.
+- `_DISTRACTOR_SHIFT_PROMPT` — lighter version for routine uneventful shift notes.
+- `generate_shift_notes(dry_run=False)` — 20 planted + 20 distractor docs. Corpus: 124
+  docs total (7 + 37 + 40 + 40).
+
+**Key things to understand**
+- **Shift notes are the semantic search test.** A planted shift note for SIG-01 says
+  "etch-rate drift and across-wafer non-uniformity... might be related to the RF matcher"
+  — no alarm code `ALM-005`, no formal subsystem label `rf_match`. Keyword/BM25 search
+  will struggle here; the dense vector retriever is what finds this doc by meaning. This
+  is why we need hybrid search (dense + sparse), not just keyword search.
+- **Three planted docs now exist for most signatures.** Alarm log (the alarm that fired) +
+  work order (root cause + fix) + shift note (first observation, informal). The benchmark
+  question "what caused the etch-rate drift on ETCH02?" now requires the agent to
+  synthesize across all three — that's multi-document reasoning, which is the whole
+  point of this architecture.
+- **The prompt voice matters for retrieval quality.** Instructing the LLM to write
+  informally ("you are briefing the incoming crew, not writing a formal report") produces
+  vocabulary closer to how a technician would *query* the system — which improves
+  semantic similarity between queries and documents at retrieval time.
+
+**Decision & why (rejected alternative)**
+- **No alarm codes in shift note prompt** — we explicitly told the LLM not to use them.
+  Injecting an alarm code would make this doc retrievable by BM25 keyword match, hiding
+  the retrieval challenge. The whole point is that shift notes are the fuzzy-language
+  evidence that *only* semantic search can surface.
+- **Same 20-distractor pattern as work orders** — consistency across doc types makes the
+  corpus statistics predictable (signal-to-noise ratio is roughly equal across types).
+
+**What could break**
+- The LLM sometimes slips in slightly formal language despite the prompt. Acceptable
+  variation; the semantic content (symptom + subsystem hints) is always present.
+
+**Definition of done:** `uv run python scripts/generate_data.py` writes 124 docs;
+planted shift note for SIG-01 is informal prose with no alarm code; 247 tests pass. ✓

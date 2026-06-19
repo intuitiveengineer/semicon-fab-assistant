@@ -450,6 +450,135 @@ Keep it 6–10 sentences total. Be specific and technical.\
     return docs
 
 # ---------------------------------------------------------------------------
+# Generator: shift handoff notes  (LLM-backed; plants symptom as first observed)
+# ---------------------------------------------------------------------------
+
+_SHIFT_NOTE_PROMPT = """\
+You are a semiconductor fab process technician writing a brief shift handoff note at the \
+end of your shift. Write in a natural, slightly informal tone — you are briefing the \
+incoming crew, not writing a formal report.
+
+Tool: {tool_id} ({process_type} {module_type})
+Chamber: {chamber}
+Shift end time: {dt}
+Observation: {symptom}
+Subsystem of concern: {subsystem_name}
+
+Write 3–6 sentences as a shift note. Include:
+- What you observed (use the symptom, but phrase it naturally as a first-hand observation)
+- When it started or how often it occurs
+- What you did or didn't do about it yet
+- A recommendation for the incoming crew
+
+Do NOT use alarm codes, formal headings, or structured format. Write as plain prose, \
+as if typed quickly at end of shift. Do not invent tool IDs or chamber names beyond \
+what is provided.\
+"""
+
+_DISTRACTOR_SHIFT_PROMPT = """\
+You are a semiconductor fab process technician writing a routine shift handoff note.
+
+Tool: {tool_id} ({process_type} {module_type})
+Chamber: {chamber}
+Shift end time: {dt}
+Subsystem: {subsystem_name}
+
+Write 2–4 sentences: a routine, unremarkable shift note mentioning a minor observation \
+or completed check on this subsystem. No major issues. Informal tone, plain prose.\
+"""
+
+
+def generate_shift_notes(dry_run: bool = False) -> list[dict]:
+    """Shift handoff note docs: one planted per signature, plus random distractors."""
+    docs = []
+
+    # --- Planted: one shift note per signature capturing the symptom ---
+    for sig_id, sig in SIGNATURES.items():
+        tool_id = rng.choice(sig.tools)
+        tool = TOOLS[tool_id]
+        chamber = rng.choice(tool.chamber_ids())
+        date_str, dt_str = _random_datetime(days_max=160, days_min=20)
+        sub = SUBSYSTEMS.get(sig.root_cause_subsystem)
+        sub_name = sub.name if sub else sig.root_cause_subsystem
+
+        text = (
+            f"[dry-run] Would generate shift note for {sig_id} on {tool_id}/{chamber}"
+            if dry_run
+            else _llm_call(_SHIFT_NOTE_PROMPT.format(
+                tool_id=tool_id,
+                chamber=chamber,
+                process_type=tool.process_type,
+                module_type=tool.module_type,
+                dt=dt_str,
+                symptom=sig.symptom,
+                subsystem_name=sub_name,
+            ))
+        )
+
+        alarm_codes = [sig.preceding_alarm] if sig.preceding_alarm else []
+        docs.append({
+            "doc_id": f"SHIFTNOTE-{sig_id}-{tool_id}",
+            "doc_type": "shift_note",
+            "tool_id": tool_id,
+            "chamber": chamber,
+            "alarm_codes": alarm_codes,
+            "subsystem": sig.root_cause_subsystem,
+            "date": date_str,
+            "text": text,
+            "metadata": {
+                "tool_id": tool_id,
+                "chamber": chamber,
+                "alarm_codes": alarm_codes,
+                "subsystem": sig.root_cause_subsystem,
+                "date": date_str,
+                "signature_id": sig_id,
+                "is_planted": True,
+            },
+        })
+
+    # --- Distractors: routine observations, no signature facts ---
+    all_subs = list(SUBSYSTEMS.values())
+    for i in range(20):
+        tool_id, tool = rng.choice(list(TOOLS.items()))
+        sub = rng.choice([s for s in all_subs if tool.module_type in s.applies_to])
+        chamber = rng.choice(tool.chamber_ids())
+        date_str, dt_str = _random_datetime(days_max=160, days_min=20)
+
+        text = (
+            f"[dry-run] Would generate distractor shift note on {tool_id}/{chamber} ({sub.name})"
+            if dry_run
+            else _llm_call(_DISTRACTOR_SHIFT_PROMPT.format(
+                tool_id=tool_id,
+                chamber=chamber,
+                process_type=tool.process_type,
+                module_type=tool.module_type,
+                dt=dt_str,
+                subsystem_name=sub.name,
+            ))
+        )
+
+        docs.append({
+            "doc_id": f"SHIFTNOTE-DIST-{i:03d}",
+            "doc_type": "shift_note",
+            "tool_id": tool_id,
+            "chamber": chamber,
+            "alarm_codes": [],
+            "subsystem": sub.subsystem_id,
+            "date": date_str,
+            "text": text,
+            "metadata": {
+                "tool_id": tool_id,
+                "chamber": chamber,
+                "alarm_codes": [],
+                "subsystem": sub.subsystem_id,
+                "date": date_str,
+                "is_planted": False,
+            },
+        })
+
+    return docs
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -497,6 +626,12 @@ def main() -> None:
     if not dry_run:
         write_corpus(wo_docs)
     print(f"  {len(wo_docs)} docs")
+
+    print("Generating shift notes...")
+    shift_docs = generate_shift_notes(dry_run=dry_run)
+    if not dry_run:
+        write_corpus(shift_docs)
+    print(f"  {len(shift_docs)} docs")
 
     if not dry_run:
         total = sum(1 for _ in CORPUS_FILE.open())
