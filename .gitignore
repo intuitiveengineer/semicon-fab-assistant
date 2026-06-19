@@ -1,6 +1,11 @@
 .venv/
 .env
-data/raw
+data/raw/*
+data/corpus/*
+data/structured/*
+!data/raw/.gitkeep
+!data/corpus/.gitkeep
+!data/structured/.gitkeep
 ai_assisted_dev_workflow.md
 plan.md
 .python-version
