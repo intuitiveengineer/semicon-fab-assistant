@@ -67,7 +67,12 @@ with st.sidebar:
     st.header("Search filters")
     st.caption("Narrow the retrieval scope. Leave blank to search all records.")
 
-    tool_id = st.text_input("Tool ID", placeholder="e.g. ETCH02")
+    TOOL_IDS = [None, "ALD01", "CVD02", "ETCH01", "ETCH02", "ETCH03", "PECVD01", "PVD01"]
+    tool_id = st.selectbox(
+        "Tool ID",
+        options=TOOL_IDS,
+        format_func=lambda x: "— all tools —" if x is None else x,
+    )
 
     SUBSYSTEMS = [
         None,
@@ -117,8 +122,8 @@ if run_button and query.strip():
     # Prepend any sidebar filters as context so the agent picks them up naturally.
     full_query = query.strip()
     hints = []
-    if tool_id.strip():
-        hints.append(f"Tool: {tool_id.strip()}")
+    if tool_id:
+        hints.append(f"Tool: {tool_id}")
     if subsystem:
         hints.append(f"Subsystem of concern: {subsystem}")
     if hints:
