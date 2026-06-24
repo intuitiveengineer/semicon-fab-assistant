@@ -39,13 +39,12 @@ header[data-testid="stHeader"] { background-color: #6F7884; }
 [data-testid="stSidebar"] { background-color: #252436 !important; border-top: none; }
 [data-testid="stSidebar"] h2 { color: #9CE0C7 !important; font-weight: 600; }
 [data-testid="stSidebar"] label { color: rgba(255,255,255,0.85) !important; }
-[data-testid="stSidebar"] p { color: rgba(255,255,255,0.65) !important; }
+[data-testid="stSidebar"] p { color: #9CE0C7 !important; }
 [data-testid="stSidebar"] input {
-    color: #FFFFFF !important;
-    background-color: rgba(255,255,255,0.08) !important;
+    color: #252436 !important;
     border-color: rgba(156,224,199,0.35) !important;
 }
-[data-testid="stSidebar"] input::placeholder { color: rgba(255,255,255,0.35) !important; }
+[data-testid="stSidebar"] input::placeholder { color: rgba(37,36,54,0.45) !important; }
 [data-testid="stSidebar"] hr { border-color: rgba(255,255,255,0.15) !important; opacity: 1; }
 
 /* Main panel dividers — Lam grey */
