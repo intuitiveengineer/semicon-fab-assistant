@@ -39,7 +39,8 @@ header[data-testid="stHeader"] { background-color: #6F7884; }
 [data-testid="stSidebar"] { background-color: #252436 !important; border-top: none; }
 [data-testid="stSidebar"] h2 { color: #9CE0C7 !important; font-weight: 600; }
 [data-testid="stSidebar"] label { color: rgba(255,255,255,0.85) !important; }
-[data-testid="stSidebar"] p { color: #FFFFFF !important; }
+[data-testid="stSidebar"] p { color: #9CE0C7 !important; }
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p { color: #FFFFFF !important; }
 [data-testid="stSidebar"] input {
     color: #252436 !important;
     border-color: rgba(156,224,199,0.35) !important;
