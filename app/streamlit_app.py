@@ -68,7 +68,20 @@ with st.sidebar:
     st.caption("Narrow the retrieval scope. Leave blank to search all records.")
 
     tool_id = st.text_input("Tool ID", placeholder="e.g. ETCH02")
-    subsystem = st.text_input("Subsystem", placeholder="e.g. rf_source")
+
+    SUBSYSTEMS = [
+        None,
+        "abatement", "bias_rf_match", "bias_rf_source", "chiller",
+        "edge_ring", "endpoint_detection", "esc", "foreline",
+        "gas_box", "gas_injector", "heater_pedestal", "precursor_delivery",
+        "remote_plasma", "rf_cabling", "rf_match", "rf_source",
+        "rough_pump", "throttle_valve", "turbo_pump", "wafer_handling",
+    ]
+    subsystem = st.selectbox(
+        "Subsystem",
+        options=SUBSYSTEMS,
+        format_func=lambda x: "— all subsystems —" if x is None else x,
+    )
 
     st.divider()
     st.caption("© 2026 intuitiveengineer")
@@ -106,8 +119,8 @@ if run_button and query.strip():
     hints = []
     if tool_id.strip():
         hints.append(f"Tool: {tool_id.strip()}")
-    if subsystem.strip():
-        hints.append(f"Subsystem of concern: {subsystem.strip()}")
+    if subsystem:
+        hints.append(f"Subsystem of concern: {subsystem}")
     if hints:
         full_query = f"{', '.join(hints)}. {full_query}"
 
