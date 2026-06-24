@@ -8,6 +8,7 @@ dependencies = [
     "openai>=2.42.0",
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
+    "qdrant-client>=1.18.0",
     "ruff>=0.15.17",
 ]
 
