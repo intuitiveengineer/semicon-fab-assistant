@@ -57,6 +57,7 @@ def run(
     verbose: bool = False,
     max_iterations: int = MAX_ITERATIONS,
     tracer: Tracer | None = None,
+    tools_override: list[dict] | None = None,
 ) -> Diagnosis:
     """Run the agent loop on a symptom query and return a structured Diagnosis.
 
@@ -65,10 +66,14 @@ def run(
         verbose:        If True, print each tool call and result to stdout.
         max_iterations: Hard cap on tool-call rounds before forcing final answer.
         tracer:         Optional Tracer instance; caller must call tracer.save().
+        tools_override: If provided, use these tool schemas instead of the default
+                        TOOLS list (used by the eval harness for ablations).
 
     Returns:
         A validated Diagnosis object.
     """
+    active_tools = tools_override if tools_override is not None else TOOLS
+
     if tracer:
         tracer.start(query)
 
@@ -81,7 +86,7 @@ def run(
         response = _client.chat.completions.create(
             model=MODEL,
             messages=messages,
-            tools=TOOLS,
+            tools=active_tools,
             tool_choice="auto",
         )
 
