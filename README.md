@@ -15,7 +15,7 @@ likely causes, recommended checks, and citations.
 |-----------|-------------|--------|
 | 1 | Domain taxonomy (tools, subsystems, alarms, failure signatures) | Done |
 | 2 | Synthetic corpus generator (5 doc types, 345 documents) | Done |
-| 3 | Retrieval layer (Qdrant + hybrid search) | In progress |
+| 3 | Retrieval layer (Qdrant + hybrid search) | Done |
 | 4 | Agent v0 (tool-calling loop + structured output) | Planned |
 | 5 | Streamlit UI | Planned |
 | 6 | Evaluation benchmark | Planned |
@@ -137,8 +137,8 @@ uv run pytest
 data/{raw,corpus,structured}/   generated corpus (gitignored)
 scripts/taxonomy.py             domain vocabulary (tools, alarms, signatures)
 scripts/generate_data.py        synthetic corpus generator
-ingest/{chunk,embed,index}.py   build the Qdrant collection
-rag/{embeddings,retriever}.py   hybrid search layer
+ingest/{chunk,index}.py         build the Qdrant collection
+rag/{embeddings,retriever}.py   hybrid search layer (dense + BM25)
 agent/{tools,schemas,loop}.py   tool-calling agent
 app/streamlit_app.py            Streamlit UI
 eval/                           benchmark + evaluation harness

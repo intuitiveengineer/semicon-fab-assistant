@@ -677,3 +677,185 @@ consistency as a hard gate on every generation run.
 
 **Definition of done:** `uv run python scripts/generate_data.py` writes 345 docs and
 prints "Validation passed"; `uv run pytest` → 251 passed. Milestone 2 complete. ✓
+
+---
+
+## Milestone 3, Step 1 — Qdrant via Docker + project README
+
+**What we built**
+- `docker-compose.yml` — pins Qdrant at `v1.18.2`, exposes ports 6333 (REST) and 6334
+  (gRPC), and mounts a named Docker volume (`qdrant_storage`) so the index survives
+  container restarts.
+- `README.md` — full local setup guide: prerequisites, clone, `uv sync`, `.env`,
+  `docker compose up -d`, corpus generation, index build, and repo structure map.
+
+**Key things to understand**
+- **Docker Compose** describes one or more containers in a single file and starts them
+  with `docker compose up -d`. For us it's one container: Qdrant.
+- **Named volumes** (`qdrant_storage:/qdrant/storage`) persist data on the host managed
+  by Docker. If the container is deleted and recreated, the index is still there.
+- **Port mapping** format is `host:container`. `"6333:6333"` means port 6333 on your
+  machine routes to port 6333 inside the container.
+- **Pinning the image version** (`v1.18.2` not `latest`) makes the setup reproducible —
+  a new Qdrant release can't silently break the schema.
+
+**Decision & why (rejected alternative)**
+- **Pinned version** over `latest` — `latest` is convenient but means the server version
+  can change between installs. We discovered this the hard way: the initial pin of `v1.9.2`
+  was incompatible with `qdrant-client 1.18.0`, causing a storage format panic on upgrade.
+  Fixed by aligning both to `v1.18.2`.
+
+**What could break**
+- If Qdrant releases a major version that changes the on-disk storage format, upgrading
+  the Docker image requires deleting the volume and re-indexing (`--recreate`).
+
+**Definition of done:** `docker compose up -d` → `curl localhost:6333/healthz` returns
+`healthz check passed`. ✓
+
+---
+
+## Milestone 3, Step 2 — Embedding wrapper (`rag/embeddings.py`)
+
+**What we built**
+- `rag/embeddings.py` — a thin module wrapping OpenAI's `text-embedding-3-small`.
+  Single public function: `embed(texts: list[str]) -> list[list[float]]`.
+  Batches requests at 100 texts per API call to stay within limits.
+
+**Key things to understand**
+- **Embeddings** convert text into a fixed-length list of numbers (a vector). For
+  `text-embedding-3-small`, each text → 1536 floats. Texts with similar meaning produce
+  vectors that are geometrically close; dissimilar texts produce vectors far apart.
+- **Why batch?** The API accepts up to 2048 texts per call. Batching at 100 is
+  conservative and keeps memory usage predictable for large corpora.
+- **Module-level client** (`_client = OpenAI()`) — created once on import, not on every
+  call. Avoids repeated connection overhead.
+
+**Decision & why (rejected alternative)**
+- **Interface over direct calls** — callers use `embed()`, not `OpenAI().embeddings.create(...)`.
+  This means swapping to a local model (e.g. `bge-small`) only requires changing this one
+  module. The `_` prefix on `_client` signals it's an internal detail.
+
+**What could break**
+- `text-embedding-3-small` has an 8191-token context limit. Very long chunks would be
+  silently truncated by the API. Our longest chunks (~2040 chars, ~500 tokens) are well
+  within limit.
+
+**Definition of done:** `embed(["test"])` returns one vector of length 1536. ✓
+
+---
+
+## Milestone 3, Step 3 — Structure-aware chunker (`ingest/chunk.py`)
+
+**What we built**
+- `ingest/chunk.py` — reads `corpus.jsonl` and produces 473 chunks from 345 documents.
+  Short doc types (alarm_log, shift_note, tool_summary, work_order) are kept whole.
+  SOP excerpts are split by section heading (PURPOSE / SCOPE / PROCEDURE / ESCALATION /
+  CHECKLIST / NOTES) using a regex, yielding ~3–4 chunks per SOP.
+- Every chunk carries the parent `doc_id` plus a `chunk_id` (`doc_id-N`) and all
+  metadata fields (tool_id, subsystem, date, alarm_codes, etc.).
+
+**Key things to understand**
+- **Why chunk at all?** Embedding a 2000-character SOP as one vector averages across
+  all its content. The PROCEDURE section (the useful bit) gets diluted by PURPOSE and
+  SCOPE. Splitting by section lets retrieval surface the exact section that matches.
+- **Why keep short docs whole?** alarm_logs (avg 307 chars) and shift_notes (avg 324
+  chars) are too short to meaningfully split — you'd lose context and create tiny orphan
+  chunks.
+- **`doc_id` vs `chunk_id`** — the agent cites `doc_id` (the source document). `chunk_id`
+  is internal to the index. Multiple chunks from one SOP share a `doc_id`.
+- **Chunk sizes by type** (measured): alarm_log 236–412 chars; shift_note 198–531;
+  work_order 847–1450; sop_excerpt 963–2040. Only SOPs warranted splitting.
+
+**Decision & why (rejected alternative)**
+- **Section-heading split** over fixed-size character chunking — fixed-size splits can
+  cut mid-sentence. Section headings are natural semantic boundaries that the LLM put
+  there intentionally. Rejected character-based sliding window chunking as overly
+  mechanical for this structured corpus.
+
+**What could break**
+- The regex `_SOP_HEADING` relies on the LLM consistently using the heading names
+  (PURPOSE, SCOPE, PROCEDURE, ESCALATION). If a generated SOP uses different headings,
+  it falls back to a single whole-doc chunk (the `_whole()` fallback). Benign but means
+  that SOP gets less precise retrieval.
+
+**Definition of done:** `uv run python ingest/chunk.py` prints 473 total chunks
+(103 alarm_log + 90 shift_note + 183 sop_excerpt + 7 tool_summary + 90 work_order). ✓
+
+---
+
+## Milestone 3, Steps 4–5 — Indexer + hybrid retriever (`ingest/index.py`, `rag/retriever.py`)
+
+**What we built**
+- `ingest/index.py` — creates a Qdrant collection with two vector slots per point:
+  `"dense"` (1536-float OpenAI embedding) and `"bm25"` (sparse BM25 vector via fastembed).
+  Upserts all 473 chunks with both vectors plus the full metadata payload.
+  `--recreate` flag wipes and rebuilds; default is safe to re-run (skips if exists).
+- `rag/retriever.py` — `search(query, k, tool_id?, doc_type?, subsystem?)` runs both
+  vector types in parallel via Qdrant `Prefetch`, fuses ranked results with
+  Reciprocal Rank Fusion (server-side), returns top-k chunk payloads.
+
+**Key things to understand**
+- **Dense search** (semantic): finds chunks whose meaning is close to the query, even
+  with no shared words. "etch rate dropped" matches "process rate degraded".
+- **Sparse search / BM25**: weighted keyword match. Rare terms score higher. Catches
+  exact alarm codes (`ALM-005`), tool IDs, and jargon that semantic search might miss.
+- **Reciprocal Rank Fusion**: for each result, computes `1 / (rank + 60)` from each
+  sub-search and sums. Results appearing in both lists float to the top. The constant
+  60 dampens the advantage of very high individual ranks.
+- **Named vectors** — because we store two vector types, the collection uses a dict
+  config (`{"dense": VectorParams(...), }`) and `sparse_vectors_config`. Each `PointStruct`
+  carries `vector={"dense": [...], "bm25": SparseVector(...)}`.
+- **`Modifier.IDF`** on the sparse config — tells Qdrant to apply Inverse Document
+  Frequency weighting, so rare terms matter more than common ones (the defining property
+  of BM25).
+- **Metadata filter** (`_build_filter`) applied inside each `Prefetch` — scopes both
+  searches before RRF runs. Filtering pre-index rather than post-retrieval is faster
+  and more precise.
+- **`Prefetch` limit of `k*3`** — each sub-search fetches 3× candidates so RRF has
+  enough material to re-rank. If both returned only `k`, there'd be nothing to fuse.
+
+**Decision & why (rejected alternative)**
+- **Qdrant native BM25 sparse vectors** over client-side RRF with two separate searches —
+  native sparse vectors let Qdrant do the fusion server-side (one round-trip, consistent
+  scoring). Client-side RRF would require two API calls and manual merge logic.
+- **fastembed `Qdrant/bm25`** over SPLADE neural sparse — BM25 is deterministic, needs
+  no GPU, and adds no download overhead beyond a small tokenizer. SPLADE gives
+  marginally better recall but adds model download complexity not needed at this scale.
+
+**What could break**
+- Changing `DIMENSIONS` or adding/removing vector slots requires `--recreate` and
+  a full re-index. The collection schema is fixed at creation time.
+- BM25 tokenizer files are cached in `~/.cache/fastembed` after first download. On a
+  fresh machine the first `index.py` or `retriever.py` call fetches them (small, ~10MB).
+
+**Definition of done:** `uv run python ingest/index.py` → 473 points in Qdrant;
+smoke test returns planted SIG-01 documents as top hits for "etch rate drift". ✓
+
+---
+
+## Milestone 3, Step 6 — Retrieval smoke test (`scripts/smoke_retrieval.py`)
+
+**What we built**
+- `scripts/smoke_retrieval.py` — five representative queries printed with top-3 results,
+  doc_id, doc_type, tool, subsystem, date, and a 200-char text preview.
+  Tests: semantic symptom match, exact alarm code, subsystem failure phrase,
+  tool+doc_type filter, subsystem+doc_type filter.
+
+**Key things to understand**
+- The smoke test is not a unit test — it's a manual sanity check that the full stack
+  (corpus → chunker → embedder → Qdrant → retriever) produces sensible results for
+  realistic queries before we build the agent on top.
+- Planted documents (SIG-01 alarm log, work order, shift note) all surfaced in the
+  top-3 for their corresponding queries. This confirms the corpus design works.
+- BM25 correctly ranked `ALM-005` alarm logs at #1 for the exact code query; the dense
+  component also pulled in a semantically related but code-free doc at #2 (expected).
+- SOP chunking produced three chunks from one doc (SCOPE, PROCEDURE, PURPOSE) as
+  separate results for the rf_source SOP query — the most relevant section (SCOPE) at #1.
+
+**What could break**
+- Results are non-deterministic if the corpus is regenerated with a different seed or
+  if OpenAI embedding outputs change between model versions. The smoke test is
+  qualitative, not asserted.
+
+**Definition of done:** all five queries return relevant results; planted docs surface
+for symptom queries; filters exclude non-matching doc types and tools. Milestone 3 complete. ✓
