@@ -1,11 +1,35 @@
 # Semiconductor Fab Maintenance Assistant
 
+**Live demo:** [fab-agent.intuitiveengineer.io](https://fab-agent.intuitiveengineer.io)
+
 An AI agent that diagnoses semiconductor equipment failures from maintenance records.
 Given a symptom query (e.g. "ETCH02 showing etch-rate drift"), the agent retrieves
 relevant work orders, alarm logs, and SOPs, then returns a structured diagnosis with
 likely causes, recommended checks, and citations.
 
-**Stack:** Python · OpenAI API · Qdrant · Streamlit · Docker
+**Stack:** Python · OpenAI API · LangGraph · Qdrant · Streamlit · Docker
+
+---
+
+## How It Works
+
+```
+Symptom query
+     │
+     ▼
+ LangGraph agent loop (3–5 iterations)
+     ├── search_maintenance_docs  →  Qdrant hybrid search (dense + BM25, fused via RRF)
+     ├── lookup_alarm_code        →  structured alarm registry
+     ├── get_tool_status          →  open issues + maintenance history
+     └── compute_mtbf / get_recent_alarms
+     │
+     ▼
+ Structured output (Pydantic)
+     └── Diagnosis: summary · likely causes · confidence · recommended checks · citations
+```
+
+The agent decides which tools to call and in what order — it is not a fixed pipeline.
+Each cause in the output must be grounded in a retrieved document ID.
 
 ---
 
@@ -19,7 +43,7 @@ likely causes, recommended checks, and citations.
 | 4 | Agent v0 (tool-calling loop + structured output) | Done |
 | 5 | Streamlit UI | Done |
 | 6 | Evaluation benchmark | Done |
-| 7 | Agent v1 (LangGraph refactor) | Planned |
+| 7 | Agent v1 (LangGraph refactor) | In progress |
 
 ---
 
@@ -51,6 +75,12 @@ uv run python eval/run_eval.py --config full
 uv run python eval/run_eval.py --config no-rag
 uv run python eval/compare_ablation.py
 ```
+
+---
+
+## Screenshot
+
+![Fab Agent UI](docs/screenshot.png)
 
 ---
 
@@ -146,19 +176,15 @@ collection. Only needs to be run once (or after regenerating the corpus).
 
 ## Running the App
 
+A hosted version is available at [fab-agent.intuitiveengineer.io](https://fab-agent.intuitiveengineer.io) — no setup required.
+
+To run locally:
+
 ```bash
 uv run streamlit run app/streamlit_app.py
 ```
 
 The app runs on `http://localhost:8501`.
-
-**On a remote server:** use SSH port forwarding to access it securely without opening firewall ports:
-
-```bash
-ssh -L 8501:localhost:8501 user@your-server-ip
-```
-
-Then open `http://localhost:8501` in your local browser.
 
 ---
 
