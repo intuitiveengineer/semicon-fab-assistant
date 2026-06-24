@@ -1077,3 +1077,85 @@ in citations; traces saved; Milestone 4 complete. ✓
 **Definition of done:** query entered in browser → agent runs → Diagnosis rendered
 with causes, confidence bars, checks, citations, and tool call trace. Verified live
 with "ETCH02 etch-rate drift" query returning correct root cause. Milestone 5 complete. ✓
+
+---
+
+## Milestone 6 — Evaluation Benchmark (`eval/`)
+
+**What we built**
+- `eval/build_benchmark.py` — generates 40 ground-truth items from the 20 planted
+  failure signatures (2 per sig). Item A = multi-doc synthesis query; Item B = alarm-
+  focused (single_doc) or PM-timing (tool_required).
+- `eval/benchmark.jsonl` — committed ground-truth file; 40 items with `relevant_doc_ids`,
+  `expected_subsystem`, `expected_alarm_code`, `expected_fix_keywords`.
+- `eval/metrics.py` — four scoring functions: `recall()`, `reciprocal_rank()`,
+  `cause_match()`, `llm_judge()`, plus `score_item()` and `aggregate()`.
+- `eval/run_eval.py` — harness; reads benchmark, runs each item through the agent,
+  scores it, writes per-item JSONL + aggregate summary JSON to `eval/results/`.
+  `--config no-rag` removes `search_maintenance_docs` from the tool list (the baseline).
+  `--no-judge` skips LLM judge calls for fast dev iterations.
+- `eval/compare_ablation.py` — auto-detects latest `full` and `no-rag` summary files
+  and prints a side-by-side delta table across all metrics and difficulty splits.
+
+**Key things to understand**
+- **Three difficulty levels** reflect three distinct retrieval challenges: `multi_doc`
+  (agent must synthesize alarm log + work order + shift note), `single_doc` (one
+  authoritative doc answers the question), and `tool_required` (must call `compute_mtbf`
+  or a similar structured tool, not just search).
+- **Recall@k vs cause_match** measure different things. Recall is a retrieval metric —
+  did the agent cite the planted documents? Cause_match is an answer accuracy metric —
+  did the agent identify the right subsystem? An agent can get cause_match=True with
+  recall=0 (answered correctly from tool calls without citing the planted docs). The
+  two metrics together tell you *why* the agent is right or wrong.
+- **LLM-as-judge (1–5)** fills the gap that recall and string-matching can't. A judge
+  score of 4.71/5 for full-RAG vs 4.09/5 for no-RAG shows the grounding quality
+  difference that the mechanical metrics understate.
+- **Single-doc recall is 0 in both configs** — this is a measurement artifact. For
+  alarm-focused queries, the agent calls `lookup_alarm_code` (a structured tool) and
+  answers correctly, but the planted `alarm_log` doc_id never appears in citations.
+  The cause_match (0.556) and judge (4.57/5) confirm the diagnosis is good — the
+  benchmark's `relevant_doc_ids` doesn't account for the tool-call path. Known
+  limitation; would be fixed in a v2 benchmark by accepting either the doc_id OR a
+  correct tool call as evidence.
+- **`tools_override` parameter on `loop.run()`** — added so the eval harness can pass
+  a filtered tool list for ablation without forking the agent code. The no-RAG config
+  simply omits `search_maintenance_docs` from the list.
+- **`eval/results/` is gitignored** — generated run artifacts, not source of truth.
+  The benchmark file itself is committed (it's ground truth). Results should be
+  re-generated from the benchmark; archiving them in git would bloat the repo.
+
+**Benchmark results (full-RAG vs no-RAG, n=40 items):**
+
+| Metric | no-RAG | full-RAG | delta |
+|--------|--------|----------|-------|
+| Recall@5 (overall) | 0.008 | 0.429 | **+0.421** |
+| Recall@5 (multi_doc) | 0.017 | 0.834 | **+0.817** |
+| MRR (overall) | 0.025 | 0.525 | **+0.500** |
+| MRR (multi_doc) | 0.050 | 1.000 | **+0.950** |
+| Cause Match (overall) | 0.475 | 0.725 | **+0.250** |
+| Cause Match (multi_doc) | 0.400 | 0.900 | **+0.500** |
+| Judge (overall) | 4.09/5 | 4.71/5 | **+0.62** |
+| Judge (multi_doc) | 3.78/5 | 4.90/5 | **+1.12** |
+
+**Decision & why (rejected alternative)**
+- **Planted corpus design** (60 signal docs in 345-doc corpus) over a real corpus with
+  manually annotated relevance judgments — we control the ground truth, so the benchmark
+  is perfectly labeled and reproducible. A real corpus would need expensive manual
+  annotation and wouldn't be shareable.
+- **LLM judge via `beta.chat.completions.parse`** over human evaluation — for a
+  portfolio project the judge is fast, cheap, and consistent. Human eval is the gold
+  standard but requires multiple raters and days of work.
+- **`--no-judge` flag** over always running the judge — each judge call costs ~2× the
+  agent call. During development, skipping it lets you iterate 2× faster.
+
+**What could break**
+- The `cause_match` string heuristic (subsystem tokens in top cause text) will false-
+  negative if the LLM describes the subsystem with a synonym. A more robust match
+  would check subsystem aliases.
+- Recall and MRR assume citations exactly match `relevant_doc_ids`. If the agent
+  discovers additional valid documents not in the planted set, it will be penalized
+  even though it's correct. This over-penalizes a well-performing agent.
+
+**Definition of done:** 40-item benchmark runs end-to-end; ablation table shows RAG
+adds +0.421 recall and +0.250 cause-match vs no-RAG baseline; results written to
+`eval/results/`. Milestone 6 complete. ✓
