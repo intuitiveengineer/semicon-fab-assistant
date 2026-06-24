@@ -11,6 +11,7 @@ Usage:
 
 import json
 import sys
+import time
 from pathlib import Path
 
 _ROOT = Path(__file__).parent.parent
@@ -22,6 +23,7 @@ from openai import OpenAI
 
 from agent.schemas import Diagnosis
 from agent.tools import TOOLS, dispatch
+from agent.traces import Tracer
 
 MODEL = "gpt-4o-mini"
 MAX_ITERATIONS = 8
@@ -50,17 +52,26 @@ Rules:
 """
 
 
-def run(query: str, verbose: bool = False, max_iterations: int = MAX_ITERATIONS) -> Diagnosis:
+def run(
+    query: str,
+    verbose: bool = False,
+    max_iterations: int = MAX_ITERATIONS,
+    tracer: Tracer | None = None,
+) -> Diagnosis:
     """Run the agent loop on a symptom query and return a structured Diagnosis.
 
     Args:
         query:          Natural-language symptom description.
         verbose:        If True, print each tool call and result to stdout.
         max_iterations: Hard cap on tool-call rounds before forcing final answer.
+        tracer:         Optional Tracer instance; caller must call tracer.save().
 
     Returns:
         A validated Diagnosis object.
     """
+    if tracer:
+        tracer.start(query)
+
     messages: list[dict] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user",   "content": query},
@@ -96,6 +107,8 @@ def run(query: str, verbose: bool = False, max_iterations: int = MAX_ITERATIONS)
         if not msg.tool_calls:
             if verbose:
                 print(f"[loop] iteration {iteration + 1}: LLM finished tool calls")
+            if tracer:
+                tracer.record_iteration(iteration + 1)
             break
 
         # Execute each tool call and append the result.
@@ -104,11 +117,16 @@ def run(query: str, verbose: bool = False, max_iterations: int = MAX_ITERATIONS)
             if verbose:
                 print(f"[tool] {tc.function.name}({args})")
 
+            t0 = time.time()
             result = dispatch(tc.function.name, args)
+            latency_ms = int((time.time() - t0) * 1000)
 
             if verbose:
                 preview = json.dumps(result)[:200]
                 print(f"       → {preview}")
+
+            if tracer:
+                tracer.record_tool_call(tc.function.name, args, result, latency_ms)
 
             messages.append({
                 "role":         "tool",
@@ -120,6 +138,8 @@ def run(query: str, verbose: bool = False, max_iterations: int = MAX_ITERATIONS)
         # Iteration cap reached — log and proceed to structured output anyway.
         if verbose:
             print(f"[loop] hit max_iterations={max_iterations}, forcing final answer")
+        if tracer:
+            tracer.record_iteration(max_iterations)
 
     # Final call: extract the structured Diagnosis from the accumulated conversation.
     # We use beta.chat.completions.parse which handles the JSON schema negotiation
@@ -130,4 +150,9 @@ def run(query: str, verbose: bool = False, max_iterations: int = MAX_ITERATIONS)
         response_format=Diagnosis,
     )
 
-    return final.choices[0].message.parsed
+    diagnosis = final.choices[0].message.parsed
+
+    if tracer:
+        tracer.finish(diagnosis, final.usage)
+
+    return diagnosis
