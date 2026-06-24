@@ -17,7 +17,7 @@ likely causes, recommended checks, and citations.
 | 2 | Synthetic corpus generator (5 doc types, 345 documents) | Done |
 | 3 | Retrieval layer (Qdrant + hybrid search) | Done |
 | 4 | Agent v0 (tool-calling loop + structured output) | Done |
-| 5 | Streamlit UI | Planned |
+| 5 | Streamlit UI | Done |
 | 6 | Evaluation benchmark | Planned |
 | 7 | Agent v1 (LangGraph refactor) | Planned |
 
@@ -119,7 +119,15 @@ collection. Only needs to be run once (or after regenerating the corpus).
 uv run streamlit run app/streamlit_app.py
 ```
 
-*(Coming in Milestone 5)*
+The app runs on `http://localhost:8501`.
+
+**On a remote server:** use SSH port forwarding to access it securely without opening firewall ports:
+
+```bash
+ssh -L 8501:localhost:8501 user@your-server-ip
+```
+
+Then open `http://localhost:8501` in your local browser.
 
 ---
 

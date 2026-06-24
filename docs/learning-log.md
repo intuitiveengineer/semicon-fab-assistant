@@ -1025,3 +1025,55 @@ JSONL with tool call sequence, token usage, and citations. ✓
 
 **Definition of done:** three queries return grounded diagnoses with planted doc_ids
 in citations; traces saved; Milestone 4 complete. ✓
+
+---
+
+## Milestone 5 — Streamlit UI (`app/streamlit_app.py`)
+
+**What we built**
+- `app/streamlit_app.py` — a single-file web app that: takes a symptom query in a
+  text area, runs the agent loop with a spinner, and renders the structured Diagnosis
+  (summary, causes with confidence progress bars, recommended checks, citations).
+- Sidebar filters for Tool ID and Subsystem — prepended to the query as context hints
+  so the agent naturally uses them when calling `search_maintenance_docs`.
+- Expandable "Tool calls" panel showing each tool name, latency, args, and result.
+- Expandable "Run metadata" panel showing run_id, iterations, token usage, latency.
+- `st.session_state` stores the diagnosis and trace between Streamlit reruns so
+  results persist when the user interacts with expanders.
+
+**Key things to understand**
+- **Streamlit's execution model** — the entire script re-runs from top to bottom on
+  every user interaction (button click, text input, expander toggle). `st.session_state`
+  is a dict that persists across reruns, which is why we store the diagnosis there
+  after the agent finishes rather than re-running the agent on every interaction.
+- **No separate backend needed** — Streamlit runs in the same Python process as the
+  agent. `from agent.loop import run` is a plain import. There is no HTTP API between
+  the UI and the agent — for a local/portfolio tool this is the right tradeoff.
+- **SSH port forwarding for remote access** — the app binds to `localhost:8501` on the
+  server. To access it from a laptop without exposing the port publicly (which would
+  bypass the firewall and allow unauthenticated access), use:
+  `ssh -L 8501:localhost:8501 user@server`. Traffic travels over the encrypted SSH
+  tunnel. Never open port 8501 on the firewall for a dev app with no auth.
+- **Sidebar filters as query hints** — rather than adding `tool_id`/`subsystem`
+  parameters to `run()`, we prepend them to the query string (e.g. "Tool: ETCH02.
+  Subsystem: rf_source. [symptom]"). The agent reads them as context and passes them
+  to `search_maintenance_docs` naturally. This keeps `run()` simple.
+
+**Decision & why (rejected alternative)**
+- **Single-file app** over splitting into components — Streamlit apps are naturally
+  script-like. At this scale, splitting into multiple files adds navigation complexity
+  with no benefit. One file is easy to read top to bottom.
+- **SSH tunnel over opening port 8501** — exposing the port publicly would allow
+  anyone to use the app and make API calls on our key. The tunnel gives the same access
+  with no security tradeoff.
+
+**What could break**
+- Streamlit's rerun model means if the user edits the query while results are
+  displayed, the old results stay until "Diagnose" is clicked again. This is expected
+  behaviour, not a bug.
+- The app requires both Qdrant (Docker) and a valid `OPENAI_API_KEY` to be running.
+  Errors are caught and displayed via `st.error()`.
+
+**Definition of done:** query entered in browser → agent runs → Diagnosis rendered
+with causes, confidence bars, checks, citations, and tool call trace. Verified live
+with "ETCH02 etch-rate drift" query returning correct root cause. Milestone 5 complete. ✓
