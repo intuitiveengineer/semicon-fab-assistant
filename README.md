@@ -35,15 +35,15 @@ Each cause in the output must be grounded in a retrieved document ID.
 
 ## Project Status
 
-| Milestone | Description | Status |
-|-----------|-------------|--------|
-| 1 | Domain taxonomy (tools, subsystems, alarms, failure signatures) | Done |
-| 2 | Synthetic corpus generator (5 doc types, 345 documents) | Done |
-| 3 | Retrieval layer (Qdrant + hybrid search) | Done |
-| 4 | Agent v0 (tool-calling loop + structured output) | Done |
-| 5 | Streamlit UI | Done |
-| 6 | Evaluation benchmark | Done |
-| 7 | Agent v1 (LangGraph refactor) | In progress |
+| Milestone | Description                                                     | Status      |
+| --------- | --------------------------------------------------------------- | ----------- |
+| 1         | Domain taxonomy (tools, subsystems, alarms, failure signatures) | Done        |
+| 2         | Synthetic corpus generator (5 doc types, 345 documents)         | Done        |
+| 3         | Retrieval layer (Qdrant + hybrid search)                        | Done        |
+| 4         | Agent v0 (tool-calling loop + structured output)                | Done        |
+| 5         | Streamlit UI                                                    | Done        |
+| 6         | Evaluation benchmark                                            | Done        |
+| 7         | Agent v1 (LangGraph refactor)                                   | In progress |
 
 ---
 
@@ -52,16 +52,16 @@ Each cause in the output must be grounded in a retrieved document ID.
 Benchmark: 40 items across 3 difficulty levels (multi_doc / single_doc / tool_required),
 graded on Recall@5, MRR, Cause Match, and an LLM judge (1–5).
 
-| Metric | no-RAG baseline | full-RAG | delta |
-|--------|-----------------|----------|-------|
-| Recall@5 — overall | 0.008 | 0.429 | **+0.421** |
-| Recall@5 — multi_doc | 0.017 | 0.834 | **+0.817** |
-| MRR — overall | 0.025 | 0.525 | **+0.500** |
-| MRR — multi_doc | 0.050 | 1.000 | **+0.950** |
-| Cause Match — overall | 0.475 | 0.725 | **+0.250** |
-| Cause Match — multi_doc | 0.400 | 0.900 | **+0.500** |
-| Judge score — overall | 4.09 / 5 | 4.71 / 5 | **+0.62** |
-| Judge score — multi_doc | 3.78 / 5 | 4.90 / 5 | **+1.12** |
+| Metric                  | no-RAG baseline | full-RAG | delta      |
+| ----------------------- | --------------- | -------- | ---------- |
+| Recall@5 — overall      | 0.008           | 0.429    | **+0.421** |
+| Recall@5 — multi_doc    | 0.017           | 0.834    | **+0.817** |
+| MRR — overall           | 0.025           | 0.525    | **+0.500** |
+| MRR — multi_doc         | 0.050           | 1.000    | **+0.950** |
+| Cause Match — overall   | 0.475           | 0.725    | **+0.250** |
+| Cause Match — multi_doc | 0.400           | 0.900    | **+0.500** |
+| Judge score — overall   | 4.09 / 5        | 4.71 / 5 | **+0.62**  |
+| Judge score — multi_doc | 3.78 / 5        | 4.90 / 5 | **+1.12**  |
 
 The biggest gains are on `multi_doc` items — complex symptom queries that require
 synthesizing alarm logs, work orders, and shift notes. Without retrieval, the LLM
@@ -78,9 +78,13 @@ uv run python eval/compare_ablation.py
 
 ---
 
-## Screenshot
+## Screenshots
 
-![Fab Agent UI](docs/screenshot.png)
+![Fab Agent UI](docs/summary.png)
+
+---
+
+![Fab Agent Citations](docs/tool_call.png)
 
 ---
 
