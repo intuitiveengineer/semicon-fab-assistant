@@ -42,8 +42,7 @@ with st.sidebar:
     subsystem = st.text_input("Subsystem", placeholder="e.g. rf_source")
 
     st.divider()
-    st.caption("Qdrant must be running (`docker compose up -d`).")
-    st.caption("OpenAI API key required in `.env`.")
+    st.caption("© 2026 intuitiveengineer")
 
 # ---------------------------------------------------------------------------
 # Main panel
