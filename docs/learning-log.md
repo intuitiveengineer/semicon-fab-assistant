@@ -859,3 +859,169 @@ smoke test returns planted SIG-01 documents as top hits for "etch rate drift". �
 
 **Definition of done:** all five queries return relevant results; planted docs surface
 for symptom queries; filters exclude non-matching doc types and tools. Milestone 3 complete. ✓
+
+---
+
+## Milestone 4, Step 1 — Output schema (`agent/schemas.py`)
+
+**What we built**
+- `agent/schemas.py` — two Pydantic models: `Cause` (cause description, confidence 0–1,
+  supporting doc_ids) and `Diagnosis` (summary, ranked causes, recommended checks,
+  citations, overall confidence).
+- Both models export a JSON Schema via `model_json_schema()` that is passed directly
+  to OpenAI's structured outputs API.
+
+**Key things to understand**
+- **Pydantic** validates data against type annotations at runtime. If the LLM returns
+  a float where a string is expected, Pydantic raises immediately rather than letting
+  bad data flow silently downstream.
+- **JSON Schema export** — `Diagnosis.model_json_schema()` generates a standard JSON
+  Schema dict. OpenAI's `response_format` parameter accepts this directly, instructing
+  the model to return JSON that matches the shape exactly. No freeform text parsing.
+- **`Field(ge=0.0, le=1.0)`** — Pydantic constraint that becomes `minimum`/`maximum`
+  in the JSON Schema. The API rejects any response where confidence is out of range.
+- **`description=` on every field** — these strings are model-facing instructions the
+  LLM reads when deciding what to put in each field. They are part of the prompt.
+- **Define the schema first** — the agent loop, UI, and eval harness all depend on this
+  shape. Defining it last would mean retrofitting three components.
+
+**Decision & why (rejected alternative)**
+- **Pydantic over plain dataclasses** — Pydantic gives JSON Schema export for free,
+  plus runtime validation. Plain dataclasses would require hand-writing the schema dict
+  and add manual validation code.
+
+**What could break**
+- OpenAI structured outputs with `beta.chat.completions.parse` requires a model that
+  supports the feature (gpt-4o and gpt-4o-mini do; older models don't).
+
+**Definition of done:** `Diagnosis.model_json_schema()` returns valid JSON Schema with
+all required fields and constraints. ✓
+
+---
+
+## Milestone 4, Step 2 — Agent tools (`agent/tools.py`)
+
+**What we built**
+- `agent/tools.py` — five tools, each with an OpenAI function schema and a Python
+  implementation, plus a `dispatch(name, args)` router.
+- `search_maintenance_docs` → calls `rag/retriever.search()` with optional filters.
+- `lookup_alarm_code` → looks up a code in the taxonomy `ALARMS` dict.
+- `get_tool_status` → reads `data/structured/tool_summaries.json`.
+- `get_recent_alarms` → scrolls Qdrant for alarm_log chunks by tool + date window.
+- `compute_mtbf` → computes days since last PM and whether the tool is overdue.
+
+**Key things to understand**
+- **OpenAI tool schema format** — each tool is a dict with `"type": "function"` and
+  a `"function"` sub-dict containing `name`, `description`, and `parameters` (a JSON
+  Schema object). The LLM reads `description` to decide when to call the tool and
+  `parameters` to know what arguments to pass.
+- **Two sides to every tool** — the schema (what the LLM sees) and the implementation
+  (what Python runs). They are deliberately separate: the schema is model-facing
+  prompt engineering; the implementation is deterministic data retrieval.
+- **Error returns, not exceptions** — implementations return `{"error": "..."}` for
+  bad inputs so the LLM sees the failure as a tool result and can recover (try a
+  different argument, skip the tool, etc.) rather than crashing the whole run.
+- **`dispatch(name, args)`** — a single entry point that maps tool name → function.
+  The loop calls `dispatch(tc.function.name, json.loads(tc.function.arguments))` for
+  every tool call the LLM makes. This keeps the loop generic — it doesn't know about
+  individual tools.
+- **`_` prefix on implementations** — signals they're internal; callers use `dispatch`.
+
+**Decision & why (rejected alternative)**
+- **Deterministic local data** for `get_tool_status`, `compute_mtbf`, `lookup_alarm_code`
+  rather than letting the LLM infer from context — deterministic tools give the agent
+  ground truth it can trust; hallucinated tool results would corrupt the diagnosis.
+- **`get_recent_alarms` via Qdrant scroll** with client-side date filter — Qdrant stores
+  dates as strings; ISO format sorts lexicographically so string comparison is correct.
+  A numeric timestamp field would allow a `Range` filter server-side but adds indexing
+  complexity not needed at this scale.
+
+**What could break**
+- `get_tool_status` and `compute_mtbf` read from `data/structured/tool_summaries.json`,
+  which is gitignored. A fresh clone must run `generate_data.py` before the agent works.
+
+**Definition of done:** all five tools return correct results via `dispatch()`; error
+paths return `{"error": "..."}` dicts; unknown tool name handled. ✓
+
+---
+
+## Milestone 4, Steps 3–4 — Agent loop + tracer (`agent/loop.py`, `agent/traces.py`)
+
+**What we built**
+- `agent/loop.py` — the tool-calling loop in plain Python. Takes a query, alternates
+  between LLM calls and tool execution until the LLM stops calling tools, then makes
+  one final `beta.chat.completions.parse` call to extract a validated `Diagnosis`.
+  Accepts an optional `Tracer` and a `verbose` flag.
+- `agent/traces.py` — `Tracer` class that records query, tool calls (name/args/result/
+  latency), iterations, usage, and total latency. `tracer.save()` appends one JSON line
+  to `data/traces/traces.jsonl`.
+
+**Key things to understand**
+- **The loop pattern** — each iteration: send messages → LLM responds with tool_calls
+  OR plain text → if tool_calls: execute + append results + loop → if no tool_calls:
+  break. This is the primitive that LangGraph (Milestone 7) abstracts into a state graph.
+- **Messages as a conversation** — the `messages` list grows with every turn: system
+  prompt, user query, assistant tool_calls, tool results, next assistant turn... The LLM
+  sees the full history each time, so it can reason about what it already tried.
+- **Tool call message format** — the assistant message must include `"tool_calls"` with
+  the call id, name, and arguments. The tool result message must reference the same
+  `"tool_call_id"`. The API enforces this pairing — mismatched ids cause an error.
+- **`for/else`** — Python runs the `else` block when a `for` loop completes without
+  hitting `break`. Here it fires when `max_iterations` is reached, meaning the LLM never
+  stopped calling tools voluntarily. We still proceed to get a structured answer.
+- **`beta.chat.completions.parse`** — the OpenAI SDK's structured output helper. Pass
+  `response_format=Diagnosis` (the Pydantic class) and it returns `message.parsed` as a
+  validated `Diagnosis` instance. No `json.loads`, no manual schema dict, no validation code.
+- **`tool_choice="auto"`** — LLM decides each turn whether to call a tool or not.
+  `"required"` forces a call every turn; `"none"` disables tools.
+- **Tracer is optional** — passing `tracer=None` (default) makes the loop behave
+  identically without tracing. The eval harness will always pass a tracer.
+- **JSONL traces** — one line per run, append-only. The eval harness reads these to
+  score recall (were the right doc_ids cited?) and accuracy (did the diagnosis match?)
+  without re-running the agent.
+
+**Decision & why (rejected alternative)**
+- **Two-phase approach** (tool loop then one final structured-output call) over
+  combined `tools + response_format` in every call — the two-phase approach is simpler
+  to reason about: phase 1 gathers evidence, phase 2 extracts the answer. Combining them
+  requires careful prompt engineering to tell the model when to stop calling tools.
+- **Messages as plain dicts** over passing `ChatCompletionMessage` objects — the SDK
+  response object (`ChatCompletionMessage`) has a different type from the input
+  parameter (`ChatCompletionMessageParam`). Building dicts explicitly keeps the structure
+  visible and avoids implicit SDK coercion.
+
+**What could break**
+- `data/traces/` is gitignored (as it should be — generated data). The `.gitkeep` file
+  ensures the directory exists in a fresh clone.
+- Token limits: very long tool results or many iterations grow the `messages` list.
+  At `max_iterations=8` with our tool payloads, we stay well within gpt-4o-mini's
+  128k context window.
+
+**Definition of done:** agent correctly identifies planted SIG-01 root cause (RF match
+network, worn vacuum capacitor) at ≥85% confidence from a symptom query; trace saved to
+JSONL with tool call sequence, token usage, and citations. ✓
+
+---
+
+## Milestone 4, Step 5 — End-to-end smoke test (`scripts/smoke_agent.py`)
+
+**What we built**
+- `scripts/smoke_agent.py` — runs three queries end-to-end with verbose output and
+  tracing. Covers: planted etch signature (SIG-01), a particle contamination query
+  (SIG-03 + SIG-20), and a deposition tool query (PECVD01).
+
+**Key things to understand**
+- The smoke test confirmed three system behaviours: (1) the agent recovers from a failed
+  tool call (`lookup_alarm_code('ALM-XXX')` → error → agent continues correctly);
+  (2) the retriever surfaces multiple distinct planted signatures for the same tool
+  (SIG-03 edge ring + SIG-20 wafer handler both appeared for the particle query);
+  (3) the agent generalises to deposition tools with no code changes.
+- Three traces are saved to `data/traces/traces.jsonl` — one per run, appended.
+
+**What could break**
+- Results are non-deterministic (LLM temperature=default). Different runs may call
+  slightly different tools or rank causes differently. The planted root causes should
+  always surface, but exact confidence values will vary.
+
+**Definition of done:** three queries return grounded diagnoses with planted doc_ids
+in citations; traces saved; Milestone 4 complete. ✓

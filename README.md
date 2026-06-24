@@ -16,7 +16,7 @@ likely causes, recommended checks, and citations.
 | 1 | Domain taxonomy (tools, subsystems, alarms, failure signatures) | Done |
 | 2 | Synthetic corpus generator (5 doc types, 345 documents) | Done |
 | 3 | Retrieval layer (Qdrant + hybrid search) | Done |
-| 4 | Agent v0 (tool-calling loop + structured output) | Planned |
+| 4 | Agent v0 (tool-calling loop + structured output) | Done |
 | 5 | Streamlit UI | Planned |
 | 6 | Evaluation benchmark | Planned |
 | 7 | Agent v1 (LangGraph refactor) | Planned |
