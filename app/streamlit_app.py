@@ -30,6 +30,17 @@ st.set_page_config(
     layout="wide",
 )
 
+st.markdown("""
+<style>
+/* Captions and secondary text — Lam grey */
+.stCaption, [data-testid="stCaptionContainer"] p { color: #6F7884 !important; }
+/* Sidebar header — Lam navy, slightly bolder */
+[data-testid="stSidebar"] h2 { color: #252436; font-weight: 600; }
+/* Thin mint accent line at the top of the sidebar */
+[data-testid="stSidebar"] { border-top: 3px solid #9CE0C7; }
+</style>
+""", unsafe_allow_html=True)
+
 # ---------------------------------------------------------------------------
 # Sidebar — optional filters
 # ---------------------------------------------------------------------------
