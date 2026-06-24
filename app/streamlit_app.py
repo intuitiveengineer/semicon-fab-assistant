@@ -32,18 +32,30 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-/* Top app toolbar — Lam navy */
-header[data-testid="stHeader"] { background-color: #252436; }
-/* Captions and secondary text — Lam grey */
-.stCaption, [data-testid="stCaptionContainer"] p { color: #6F7884 !important; }
-/* Sidebar header — Lam navy, slightly bolder */
-[data-testid="stSidebar"] h2 { color: #252436; font-weight: 600; }
-/* Remove the light border (sidebar bg is now the hover-mint) */
-[data-testid="stSidebar"] { border-top: none; }
-/* Divider lines — Lam grey */
-hr { border-color: #6F7884 !important; opacity: 0.4; }
-/* Metric values (confidence %) — Lam navy */
+/* Top toolbar — Lam grey */
+header[data-testid="stHeader"] { background-color: #6F7884; }
+
+/* Sidebar — Lam navy */
+[data-testid="stSidebar"] { background-color: #252436 !important; border-top: none; }
+[data-testid="stSidebar"] h2 { color: #9CE0C7 !important; font-weight: 600; }
+[data-testid="stSidebar"] label { color: rgba(255,255,255,0.85) !important; }
+[data-testid="stSidebar"] p { color: rgba(255,255,255,0.65) !important; }
+[data-testid="stSidebar"] input {
+    color: #FFFFFF !important;
+    background-color: rgba(255,255,255,0.08) !important;
+    border-color: rgba(156,224,199,0.35) !important;
+}
+[data-testid="stSidebar"] input::placeholder { color: rgba(255,255,255,0.35) !important; }
+[data-testid="stSidebar"] hr { border-color: rgba(255,255,255,0.15) !important; opacity: 1; }
+
+/* Main panel dividers — Lam grey */
+.main hr { border-color: #6F7884 !important; opacity: 0.3; }
+
+/* Metric values (confidence %) — Lam navy, bold */
 [data-testid="stMetricValue"] { color: #252436 !important; font-weight: 700; }
+
+/* Captions — Lam grey */
+.stCaption, [data-testid="stCaptionContainer"] p { color: #6F7884 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -65,11 +77,14 @@ with st.sidebar:
 # Main panel
 # ---------------------------------------------------------------------------
 
-st.title("🔧 Semiconductor Fab Maintenance Assistant")
-st.caption(
-    "Describe an equipment symptom and the agent will retrieve relevant "
-    "maintenance records and return a structured diagnosis."
-)
+st.markdown("""
+<div style="background-color:#252436; padding:1.25rem 1.5rem; border-radius:6px; margin-bottom:1.25rem;">
+    <h1 style="color:#FFFFFF; margin:0; padding:0; font-size:1.9rem;">🔧 Semiconductor Fab Maintenance Assistant</h1>
+    <p style="color:#9CE0C7; margin:0.35rem 0 0 0; font-size:0.95rem; opacity:0.9;">
+        Describe an equipment symptom — the agent retrieves relevant maintenance records and returns a structured diagnosis.
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
 query = st.text_area(
     "Symptom description",
