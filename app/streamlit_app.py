@@ -32,12 +32,18 @@ st.set_page_config(
 
 st.markdown("""
 <style>
+/* Top app toolbar — Lam navy */
+header[data-testid="stHeader"] { background-color: #252436; }
 /* Captions and secondary text — Lam grey */
 .stCaption, [data-testid="stCaptionContainer"] p { color: #6F7884 !important; }
 /* Sidebar header — Lam navy, slightly bolder */
 [data-testid="stSidebar"] h2 { color: #252436; font-weight: 600; }
-/* Thin mint accent line at the top of the sidebar */
-[data-testid="stSidebar"] { border-top: 3px solid #9CE0C7; }
+/* Remove the light border (sidebar bg is now the hover-mint) */
+[data-testid="stSidebar"] { border-top: none; }
+/* Divider lines — Lam grey */
+hr { border-color: #6F7884 !important; opacity: 0.4; }
+/* Metric values (confidence %) — Lam navy */
+[data-testid="stMetricValue"] { color: #252436 !important; font-weight: 700; }
 </style>
 """, unsafe_allow_html=True)
 
