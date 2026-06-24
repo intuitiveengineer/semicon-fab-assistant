@@ -322,3 +322,358 @@ Promoted the `__main__` "valid: True/False" checks into a real, enforced test su
 
 **Definition of done:** `uv run pytest` passes (234 cases); `scripts/taxonomy.py` no
 longer prints "valid" lines. ✓
+
+---
+
+## Milestone 2, Step 1 — Generator scaffold (`scripts/generate_data.py`, `data/` dirs)
+
+First task of Milestone 2 (synthetic corpus). Establishes the skeleton before any LLM
+calls are made.
+
+**What we built**
+- `scripts/generate_data.py` — module with `--dry-run` / `--seed` CLI args and a
+  module-level `rng = random.Random(SEED)` instance (seed 42).
+- `data/{raw,corpus,structured}/` — output directories tracked via `.gitkeep`; contents
+  gitignored so generated files never land in version control.
+- Updated `.gitignore`: `data/raw/*` / `data/corpus/*` / `data/structured/*` with
+  `!.gitkeep` exceptions — ignores *contents*, not the directory itself.
+
+**Key things to understand**
+- **`data/raw/`** will cache one file per LLM call. On a rerun, we skip cached calls so
+  we only pay the API once. `data/corpus/corpus.jsonl` is the final assembled corpus;
+  `data/structured/` holds non-LLM records (tool summaries) in tidy JSON for the agent
+  tool layer.
+- **`data/raw/*` vs `data/raw/`:** gitignoring a *directory* blocks all `!exceptions`
+  inside it. Using `/*` ignores the *contents* instead, which lets `!.gitkeep` work.
+  A subtle but important `.gitignore` behaviour.
+- **Seeded RNG:** constructing `random.Random(SEED)` at module level means every import
+  gets the same starting state. Re-seeding in `main()` via `--seed` overrides for
+  experiments without touching the global default.
+
+**Decision & why (rejected alternative)**
+- `sys.path` manipulation at the top of the script (`sys.path.insert(0, str(_ROOT))`)
+  rather than running via `python -m scripts.generate_data` — keeps the familiar
+  `uv run python scripts/generate_data.py` invocation consistent with the rest of the
+  project.
+
+**What could break**
+- Nothing in this step calls the LLM or writes real corpus content; all risk is deferred.
+
+**Definition of done:** `--dry-run` prints plan; bare run prints "not yet implemented";
+dirs exist; no unintended files staged. ✓
+
+---
+
+## Milestone 2, Step 2 — Tool summary generator (`generate_tool_summaries`)
+
+First real generator — no LLM, pure taxonomy-to-document transform. Proves the document
+envelope before spending API credits.
+
+**What we built**
+- `generate_tool_summaries()` in `scripts/generate_data.py`: one doc per tool (7 total),
+  MTBF + last-PM date from seeded RNG, open issues anchored to the tool's failure
+  signatures (60% of the time) or a random applicable subsystem (40%).
+- `write_corpus()` helper: appends JSON lines to `data/corpus/corpus.jsonl`.
+- `data/structured/tool_summaries.json`: the raw structured records written separately
+  for the agent tool layer (no `text` field — just the machine-readable payload).
+- `tests/test_generate_data.py` (13 cases): one doc per tool, unique IDs, all envelope
+  fields present, chambers match taxonomy, JSON-serialisable.
+
+**Key things to understand**
+- **`text` vs `metadata` — two jobs, same document.**
+  `text` is prose written for the embedding model: it's what semantic search runs
+  against, so converting structured data to clear sentences here ("MTBF: 70 days" →
+  "Mean time between failures (MTBF): 70 days.") directly affects retrieval quality.
+  `metadata` stays structured and lands in Qdrant as a payload — never embedded, only
+  filtered (e.g., `tool_id = "ETCH02"`). Together they give best-of-both-worlds:
+  semantic recall + exact structured filtering.
+- **Document envelope fields** (every corpus doc has these): `doc_id`, `doc_type`,
+  `tool_id`, `chamber`, `alarm_codes`, `subsystem`, `date`, `text`, `metadata`.
+  Consistency here is what makes the ingest pipeline simple: one schema, five doc types.
+- **Open issues tied to signatures:** when a tool has a known failure signature (e.g.,
+  ETCH02 / RF instability), there's a 60% chance its open-issue text references that
+  signature's symptom and subsystem. This means benchmark-relevant clues appear even in
+  tool summary docs — another path for the retriever to find corroborating evidence.
+
+**Decision & why (rejected alternative)**
+- **Tool summaries first** over any LLM-backed doc type — zero API cost, zero network
+  failure surface. Proves the envelope shape and test harness before we introduce
+  variability. Rejected starting with alarm logs (second simplest): they do need minimal
+  LLM templating and would have mixed two concerns in the first real step.
+- **Corpus wiped on each full run** (`CORPUS_FILE.write_text("")`) — the corpus is fully
+  deterministic from the seed, so there's no value in appending; a fresh run should
+  always produce the same output. Rejected append-only: stale docs from a previous
+  partial run would corrupt the benchmark.
+
+**What could break**
+- `data/corpus/corpus.jsonl` is truncated at the start of `main()`. A crash mid-run
+  leaves a partial corpus. Later steps will add a staging / atomic-write pattern if
+  needed.
+
+**Definition of done:** `uv run python scripts/generate_data.py` writes 7 docs;
+`uv run pytest` passes (247 cases, 13 new). ✓
+
+---
+
+## Milestone 2, Step 3 — Alarm log generator (`generate_alarm_logs`)
+
+First LLM-backed generator. Produces machine-formatted alarm event logs; plants the
+`preceding_alarm` from each failure signature into the corpus.
+
+**What we built**
+- `_cache_path(prompt)` — hashes the prompt (SHA-256, first 20 hex chars) to a filename
+  in `data/raw/`. Used by `_llm_call()`.
+- `_llm_call(prompt, model)` — calls `gpt-4o-mini`, writes raw response to cache, returns
+  cached content on reruns. Lazy-imports `config` and `openai` so dry-run never touches
+  the API or validates the key.
+- `_ALARM_LOG_PROMPT` — template injecting tool_id, chamber, alarm_code, alarm text,
+  subsystem name, typical causes, and datetime. LLM writes terse pipe-delimited log lines
+  with plausible sensor readings; we supply all taxonomy facts.
+- `generate_alarm_logs(dry_run=False)` — 18 planted docs (one per signature×tool that
+  has a `preceding_alarm`) + up to 22 distractors (random tool+alarm pairs, skipped when
+  the alarm's subsystem doesn't apply to the tool's module type). Total: 37 docs.
+- `main()` refactored to pass `dry_run` through to each generator; dry-run now prints
+  planned doc counts without writing files or calling the API.
+
+**Key things to understand**
+- **LLM as a prose writer, not a fact inventor.** Every taxonomy entity (tool_id,
+  chamber, alarm_code, subsystem) is injected by us into the prompt. The model varies
+  phrasing and invents plausible sensor values — the two things it's good at. If we let
+  the model choose alarm codes, it would hallucinate codes outside our taxonomy,
+  breaking the validation gate we'll add later.
+- **The raw cache pattern.** Each LLM response is stored as a JSON file keyed by prompt
+  hash. A rerun with the same seed skips every API call — the corpus is free to
+  regenerate after the first run. This is the same pattern production ML pipelines use
+  for expensive preprocessing. The `data/raw/` directory is gitignored, so the cache
+  is local only.
+- **Planted vs distractor.** `is_planted: True` in metadata marks docs that contain
+  deliberate signature evidence. Distractors are real-alarm-code events on real tools
+  but not tied to any signature — they make retrieval harder (the model must distinguish
+  relevant from plausible-but-irrelevant). Both types are necessary for the benchmark
+  to be meaningful.
+- **Scope filtering for distractors.** When picking a random alarm for a distractor,
+  we skip the combination if the alarm's subsystem doesn't apply to the tool's module
+  type (e.g., don't assign an etch-only ESC alarm to PECVD01). This respects the
+  taxonomy's `applies_to` logic and keeps generated text physically plausible.
+
+**Decision & why (rejected alternative)**
+- **`gpt-4o-mini` for generation** over `gpt-4o` — the alarm log format is tightly
+  constrained by the prompt (pipe-delimited, terse, numeric values). Mini handles this
+  well and costs ~20× less; the quality difference appears only in open-ended prose where
+  we'd use a larger model anyway. Easy to swap via `_llm_call(model=...)`.
+- **Lazy config/openai import inside `_llm_call`** over top-level import — keeps
+  dry-run clean (no key validation, no import cost) and keeps the module importable in
+  tests without a valid `.env`.
+- **One alarm log per signature×tool** over batching multiple alarms per doc — keeps
+  each doc focused on one event and one alarm code, which simplifies metadata tagging
+  and retrieval filtering. A single-alarm doc is also a cleaner unit for the chunker
+  (Milestone 3) to handle.
+
+**What could break**
+- LLM output format varies slightly between calls even at temperature 0.7. The cache
+  locks it in after the first run, but a cache-clear rerun may produce slightly different
+  text (not a problem for the benchmark since we score on metadata fields, not exact
+  text).
+- Distractor count can be <22 if many random picks are skipped by scope filtering.
+  Currently yields 19 distractors. Acceptable for now; can be bumped by increasing the
+  loop count.
+
+**Definition of done:** `uv run python scripts/generate_data.py` writes 44 docs (7
+tool summaries + 37 alarm logs); all 37 LLM outputs cached in `data/raw/`; 247 tests
+pass. ✓
+
+---
+
+## Milestone 2, Step 4 — Work order generator (`generate_work_orders`)
+
+The most information-dense doc type: contains the root cause and fix from each failure
+signature — the "answer" half of the benchmark.
+
+**What we built**
+- `_WORK_ORDER_PROMPT` — template injecting tool_id, chamber, process_type, dates,
+  technician, symptom, root_cause_subsystem, root_cause, and fix. LLM writes in four
+  fixed sections: PROBLEM DESCRIPTION / FINDINGS / ACTIONS TAKEN / RESULT.
+- `_DISTRACTOR_WO_PROMPT` — lighter template for routine PM checks on a random subsystem;
+  no signature facts injected.
+- `generate_work_orders(dry_run=False)` — 20 planted docs (one per signature, tool and
+  chamber chosen by seeded RNG) + 20 distractor routine maintenance docs. Total: 40 docs.
+- Corpus: 84 docs total after this step (7 + 37 + 40).
+
+**Key things to understand**
+- **Work orders complete the evidence triangle.** For signatures with a `preceding_alarm`:
+  the alarm log doc shows *that* the alarm fired; the work order shows *what was found and
+  fixed*. Together they are the multi-document chain the agent must synthesize to answer
+  "what caused the etch-rate drift on ETCH02?" — neither doc alone is sufficient.
+- **Planted work orders reference the alarm code in metadata.** `alarm_codes` on a planted
+  WO is set to `[sig.preceding_alarm]` when one exists. This lets the retriever find WOs
+  by alarm code even though the alarm code may not appear in the prose text (the LLM was
+  told not to invent codes). Metadata filtering is doing work here that semantic search
+  alone can't.
+- **Distractor WOs use a separate lighter prompt.** Injecting full signature facts into a
+  distractor would accidentally plant evidence. A separate prompt for distractors keeps
+  them realistic (real fab maintenance language) without carrying benchmark-relevant
+  answers.
+- **The cache means reruns are free.** All 37 alarm log calls hit cache; only the 40 work
+  order calls were new API calls this run. After this run those 40 are also cached.
+
+**Decision & why (rejected alternative)**
+- **Fixed section headings (PROBLEM DESCRIPTION / FINDINGS / etc.)** over free-form prose
+  — headings give the chunker (Milestone 3) clean split points and make it easier for the
+  agent to cite which section the evidence came from. Free-form prose is harder to parse
+  and would require smarter chunking later.
+- **One planted WO per signature** (not one per signature×tool) — work orders capture the
+  root cause + fix, which is the same regardless of which specific tool surfaced the
+  failure. Generating duplicates per tool would dilute the benchmark signal. Alarm logs
+  got one-per-tool because alarms fire on specific chambers; diagnoses are shared.
+
+**What could break**
+- The LLM occasionally bolds headings (`**FINDINGS:**`) rather than plain text. This is
+  cosmetic and doesn't affect retrieval. The chunker will strip markdown if needed.
+- Distractor WO doc_ids are `WO-DIST-000` through `WO-DIST-019`. If the distractor loop
+  count ever changes, these ids shift — not a problem now, but worth noting if we add
+  id-based lookups later.
+
+**Definition of done:** `uv run python scripts/generate_data.py` writes 84 docs (7 + 37
++ 40); planted WO for SIG-01 contains correct symptom/root-cause/fix prose; 247 tests
+pass. ✓
+
+---
+
+## Milestone 2, Step 5 — Shift note generator (`generate_shift_notes`)
+
+The "tribal knowledge" doc type: informal first-person observations written at shift end,
+before root causes are known. The hardest retrieval challenge in the corpus.
+
+**What we built**
+- `_SHIFT_NOTE_PROMPT` — instructs the LLM to write as a tired technician briefing the
+  incoming crew: natural prose, no alarm codes, no headings, 3–6 sentences. Injects
+  tool, chamber, symptom, and subsystem of concern.
+- `_DISTRACTOR_SHIFT_PROMPT` — lighter version for routine uneventful shift notes.
+- `generate_shift_notes(dry_run=False)` — 20 planted + 20 distractor docs. Corpus: 124
+  docs total (7 + 37 + 40 + 40).
+
+**Key things to understand**
+- **Shift notes are the semantic search test.** A planted shift note for SIG-01 says
+  "etch-rate drift and across-wafer non-uniformity... might be related to the RF matcher"
+  — no alarm code `ALM-005`, no formal subsystem label `rf_match`. Keyword/BM25 search
+  will struggle here; the dense vector retriever is what finds this doc by meaning. This
+  is why we need hybrid search (dense + sparse), not just keyword search.
+- **Three planted docs now exist for most signatures.** Alarm log (the alarm that fired) +
+  work order (root cause + fix) + shift note (first observation, informal). The benchmark
+  question "what caused the etch-rate drift on ETCH02?" now requires the agent to
+  synthesize across all three — that's multi-document reasoning, which is the whole
+  point of this architecture.
+- **The prompt voice matters for retrieval quality.** Instructing the LLM to write
+  informally ("you are briefing the incoming crew, not writing a formal report") produces
+  vocabulary closer to how a technician would *query* the system — which improves
+  semantic similarity between queries and documents at retrieval time.
+
+**Decision & why (rejected alternative)**
+- **No alarm codes in shift note prompt** — we explicitly told the LLM not to use them.
+  Injecting an alarm code would make this doc retrievable by BM25 keyword match, hiding
+  the retrieval challenge. The whole point is that shift notes are the fuzzy-language
+  evidence that *only* semantic search can surface.
+- **Same 20-distractor pattern as work orders** — consistency across doc types makes the
+  corpus statistics predictable (signal-to-noise ratio is roughly equal across types).
+
+**What could break**
+- The LLM sometimes slips in slightly formal language despite the prompt. Acceptable
+  variation; the semantic content (symptom + subsystem hints) is always present.
+
+**Definition of done:** `uv run python scripts/generate_data.py` writes 124 docs;
+planted shift note for SIG-01 is informal prose with no alarm code; 247 tests pass. ✓
+
+---
+
+## Milestone 2, Step 6 — SOP excerpt generator (`generate_sop_excerpts`)
+
+The fifth and final doc type: procedural reference material indexed by subsystem, not
+by failure event.
+
+**What we built**
+- `_SOP_PROMPT` — generates a 180–250-word OEM-style procedure with fixed headings:
+  PURPOSE / SCOPE / PROCEDURE (numbered steps + thresholds) / ESCALATION. Injects
+  subsystem name, applicable module types, procedure type, and a fake document ID.
+- `_SOP_EXTRA_PROMPT` — shorter tool-specific checklist variant (120–180 words) for
+  process-type-specific SOPs.
+- `_SOP_PROCEDURE_TYPES` — five procedure flavours (inspection, PM, fault response,
+  replacement, calibration) picked by RNG so not all SOPs read the same.
+- `generate_sop_excerpts(dry_run=False)` — 20 primary SOPs (one per subsystem) +
+  15 tool-specific extras = 35 docs. Corpus: 159 docs total.
+
+**Key things to understand**
+- **SOPs are the "recommended checks" source.** When the agent proposes next actions
+  in its structured output (`recommended_checks`), it should be citing SOP procedures.
+  A retrieved RF match SOP tells the agent to "verify impedance at 50 ± 2 Ω" — a
+  concrete, actionable check it wouldn't generate from general knowledge alone.
+- **SOPs are subsystem-indexed, not event-indexed.** Every subsystem has reference
+  material regardless of whether it appears in a failure signature. This prevents the
+  retriever from only returning docs that mention the failure — sometimes the most useful
+  retrieved doc is a procedure, not a maintenance record.
+- **`tool_id: None` on primary SOPs.** Subsystem SOPs apply across tools of the right
+  module type, not to one specific tool. Setting `tool_id` to `None` means the Qdrant
+  filter won't accidentally exclude them when the agent queries by tool — they'll always
+  be in the pool for semantic retrieval. The 15 extras do carry a `tool_id` since they
+  are process-specific.
+- **159 docs is below the 300–350 target.** All five doc types are now seeded. The gap
+  to target is filled in Step 7 (volume boost) by increasing distractor counts — no new
+  doc types needed.
+
+**Decision & why (rejected alternative)**
+- **One SOP per subsystem** over one per signature — SOPs are reference material, not
+  incident records. Tying them to signatures would mean most subsystems have no SOP and
+  we'd miss the "recommended checks" retrieval case entirely.
+- **Two-tier structure (primary + tool-specific extras)** over just 20 generic SOPs —
+  tool-specific checklists add realistic variety and give the retriever something more
+  specific to return when the query names a tool like "ALD01 precursor delivery."
+
+**What could break**
+- Primary SOPs have `tool_id: None`. The existing test suite checks tool_id is in
+  `TOOLS` only for tool_summary docs, so this is fine. A future test for SOP docs
+  should allow `None` explicitly.
+
+**Definition of done:** `uv run python scripts/generate_data.py` writes 159 docs;
+RF match SOP contains numbered steps with numeric thresholds; 247 tests pass. ✓
+
+---
+
+## Milestone 2, Step 7 — Volume boost + validation gate
+
+Final step of Milestone 2. Brings corpus to target size and enforces taxonomy
+consistency as a hard gate on every generation run.
+
+**What we built**
+- Increased distractor loop counts: alarm logs 22 → 110 iterations (~85 pass scope
+  filter), work orders 20 → 70, shift notes 20 → 70, SOP extras 15 → 35.
+- `validate_corpus(path)` — reads every line of corpus.jsonl and checks: `tool_id`
+  (when not None) is in `TOOLS`; every entry in `alarm_codes` is in `ALARMS`. Returns
+  a list of violation strings; empty list = clean.
+- `main()` calls `validate_corpus()` after generation and exits non-zero on any
+  violation — making the gate automatic on every full run.
+- `TestCorpusValidation` in `tests/test_generate_data.py` (4 cases, skipif corpus
+  absent): no taxonomy violations, ≥300 docs, all envelope fields present, unique
+  doc_ids. 251 total tests pass.
+- Final corpus: **345 docs** — 7 tool summaries + 103 alarm logs + 90 work orders +
+  90 shift notes + 55 SOPs.
+
+**Key things to understand**
+- **The validation gate closes the consistency loop.** The taxonomy is the allow-list;
+  the generator is the writer; the gate is the enforcer. Without it, an LLM that
+  hallucinated "ALM-999" or "ETCH09" would silently corrupt the corpus. With it, bad
+  refs fail the run loudly and get fixed before any doc reaches Qdrant.
+- **Volume vs planted ratio.** Of 345 docs, 80 are planted signal (20 alarm logs +
+  20 work orders + 20 shift notes + 20 tool summaries that reference signature issues)
+  and 265 are noise. That's roughly a 1:3 signal-to-noise ratio — realistic for a
+  working retrieval benchmark where recall isn't trivially easy.
+- **Skipping corpus tests when the file doesn't exist** (`pytest.mark.skipif`) is the
+  right pattern for tests that depend on generated artifacts. It keeps `uv run pytest`
+  clean for anyone who hasn't run the generator yet, without hiding the tests.
+
+**Decision & why (rejected alternative)**
+- **Validation at generation time** (called from `main()`) over **validation only in
+  pytest** — the generator is the production path; catching violations there prevents
+  bad docs from ever being written to the corpus. The pytest is a second line of
+  defence, not the primary one.
+
+**Definition of done:** `uv run python scripts/generate_data.py` writes 345 docs and
+prints "Validation passed"; `uv run pytest` → 251 passed. Milestone 2 complete. ✓
