@@ -22,7 +22,7 @@ _ROOT = Path(__file__).parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from agent.loop import run as agent_run
+from agent.loop_lg import run as agent_run  # LangGraph refactor (v1); see agent/loop.py for v0
 from agent.tools import TOOLS
 from agent.traces import Tracer
 from eval.metrics import aggregate, score_item

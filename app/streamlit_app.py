@@ -17,7 +17,7 @@ if str(_ROOT) not in sys.path:
 
 import streamlit as st
 
-from agent.loop import run
+from agent.loop_lg import run  # LangGraph refactor (v1); see agent/loop.py for v0
 from agent.traces import Tracer
 
 # ---------------------------------------------------------------------------
